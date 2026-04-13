@@ -668,7 +668,7 @@ function toggleHints(){
   const btn=document.getElementById('hintToggleBtn');
   if(btn){btn.classList.toggle('active',showHints);btn.textContent=showHints?'🔤 힌트 ON':'🔤 힌트 OFF';}
   // 현재 미리보기 재렌더
-  if(pdfMode) return; // PDF 모드는 다음 sendPdfDual에서 반영
+  if(pdfMode){ displayPdfPage(pdfCurrentPage, pdfCurrentSubPage); return; }
   renderBothPreviews(getPageCells(), textLineCells, graphicCellHints.slice(dotpadPage*cellsPerPage(), (dotpadPage+1)*cellsPerPage()), textCellHints);
 }
 
@@ -1398,8 +1398,27 @@ async function displayPdfPage(pageNum, subPage){
   prefetchNeighborPages(pageNum);
 }
 
-async function prevPdfPage(){if(pdfCurrentPage>1) await displayPdfPage(pdfCurrentPage-1, 0);}
-async function nextPdfPage(){if(pdfCurrentPage<pdfTotalPages) await displayPdfPage(pdfCurrentPage+1, 0);}
+async function prevPdfPage(){
+  const isBrf=(docType==='brf'||docType==='brl');
+  if(!isBrf && pdfViewMode==='text' && pdfCurrentSubPage>0){
+    displayPdfPage(pdfCurrentPage, pdfCurrentSubPage-1);
+  } else if(pdfCurrentPage>1){
+    await displayPdfPage(pdfCurrentPage-1, 0);
+  }
+}
+async function nextPdfPage(){
+  const isBrf=(docType==='brf'||docType==='brl');
+  if(!isBrf && pdfViewMode==='text'){
+    const subs=pdfPageSubTexts[pdfCurrentPage];
+    if(subs && pdfCurrentSubPage<subs.length-1){
+      displayPdfPage(pdfCurrentPage, pdfCurrentSubPage+1);
+    } else if(pdfCurrentPage<pdfTotalPages){
+      await displayPdfPage(pdfCurrentPage+1, 0);
+    }
+  } else if(pdfCurrentPage<pdfTotalPages){
+    await displayPdfPage(pdfCurrentPage+1, 0);
+  }
+}
 
 // ── 이웃 페이지 백그라운드 프리패치 (캐시 없을 때만 실행) ────────────
 async function prefetchNeighborPages(currentPage){
@@ -1429,8 +1448,8 @@ function setPdfLang(l){
   if(docType==='txt'||docType==='docx'){
     // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
     addLog('info',`언어 변경 → 페이지 재분할 중...`);
-    // 원문 텍스트 복원 후 재분할
-    const fullText=Object.values(pdfPageTexts).join('\n\n');
+    // 원문 텍스트 복원 후 재분할 — 숫자 키 오름차순 보장
+    const fullText=Object.keys(pdfPageTexts).map(Number).sort((a,b)=>a-b).map(k=>pdfPageTexts[k]).join('\n\n');
     const pages=splitTextToPages(fullText, l);
     pages.forEach((p,i)=>{pdfPageTexts[i+1]=p;});
     pdfTotalPages=pages.length;
@@ -1502,14 +1521,18 @@ async function switchPdfView(targetMode){
       setSendBtn(false); isSending=false;
     }
   } else {
-    // 텍스트 도트로 전환
-    const text=await getPdfPageText(pdfCurrentPage)||'';
+    // 텍스트 도트로 전환 — 서브페이지 시스템 적용
+    const fullText=await getPdfPageText(pdfCurrentPage)||'';
+    // 서브페이지 분할 (300셀 초과 시 캐싱)
+    const subs=getOrBuildSubPages(pdfCurrentPage, fullText);
+    pdfCurrentSubPage=Math.min(pdfCurrentSubPage, subs.length-1);
+    const text=subs[pdfCurrentSubPage];
     const bodyCells=textToCells(text, pdfLang);
     const gHintsTxt=buildCellHints(text, pdfLang);
     const tHintsTxt=buildCellHints(pageLabel,'en');
     renderBothPreviews(bodyCells.slice(0,CELLS_GRAPHIC), textLineCells, gHintsTxt, tHintsTxt);
     if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
-    addLog('info','📝 텍스트 뷰로 전환');
+    addLog('info',`📝 텍스트 뷰로 전환${subs.length>1?` (${pdfCurrentSubPage+1}/${subs.length})`:''}`);
     if(bleChar&&!isSending){
       isSending=true; setSendBtn(true);
       try{
@@ -1684,12 +1707,20 @@ async function connectDotPad(){
     document.getElementById('sendBtn').disabled=false;
     enableAutoSend(true);
     // 연결 즉시 현재 콘텐츠 전송
-    if(pdfMode&&pdfDoc){
-      const _text=await getPdfPageText(pdfCurrentPage);
-      const _page=await pdfDoc.getPage(pdfCurrentPage);
-      const _hasImg=await pageHasImages(_page);
-      const _dots=_hasImg?await renderPageToDots(_page):null;
-      sendPdfDual(_text,pdfCurrentPage,_dots);
+    if(pdfMode){
+      if(pdfDoc){
+        // PDF
+        const _text=await getPdfPageText(pdfCurrentPage);
+        const _page=await pdfDoc.getPage(pdfCurrentPage);
+        const _hasImg=await pageHasImages(_page);
+        const _dots=_hasImg?await renderPageToDots(_page):null;
+        sendPdfDual(_text,pdfCurrentPage,_dots);
+      } else {
+        // TXT / DOCX / BRF / BRL
+        const _text=pdfPageTexts[pdfCurrentPage]||'';
+        const _dots=pdfPageDots[pdfCurrentPage]||null;
+        sendPdfDual(_text,pdfCurrentPage,_dots);
+      }
     } else if(allCells.length>0) sendCurrentPage();
   }catch(e){
     if(e.name==='NotFoundError'){addLog('info','기기 선택 취소됨');setStatus('disconnected','연결되지 않음');}
@@ -1787,8 +1818,6 @@ function setDisplayMode(mode){
   dispMode=mode;
   document.getElementById('modeText').classList.toggle('active',mode==='text');
   document.getElementById('modeGraphic').classList.toggle('active',mode==='graphic');
-  document.getElementById('previewLabel').textContent=
-    mode==='text'?'닷패드 20셀 텍스트 영역 미리보기':'닷패드 300셀 그래픽 영역 미리보기 (10줄×30셀)';
   dotpadPage=0;updatePageUI();
   if(bleChar) sendCurrentPage();
 }
@@ -1803,12 +1832,20 @@ async function prevPage(auto=false){if(dotpadPage>0){dotpadPage--;updatePageUI()
 async function nextPage(auto=false){if(dotpadPage<totalPages()-1){dotpadPage++;updatePageUI();if(auto||bleChar)sendCurrentPage();}}
 async function manualSend(){
   if(!bleChar){addLog('err','닷패드가 연결되지 않았습니다');return;}
-  if(pdfMode&&pdfDoc){
-    const _text=await getPdfPageText(pdfCurrentPage);
-    const _page=await pdfDoc.getPage(pdfCurrentPage);
-    const _hasImg=!!pdfPageHasImg[pdfCurrentPage];
-    const _dots=_hasImg?await renderPageToDots(_page):null;
-    await sendPdfDual(_text, pdfCurrentPage, _dots);
+  if(pdfMode){
+    if(pdfDoc){
+      // PDF: 텍스트 + 이미지 추출 후 전송
+      const _text=await getPdfPageText(pdfCurrentPage);
+      const _page=await pdfDoc.getPage(pdfCurrentPage);
+      const _hasImg=!!pdfPageHasImg[pdfCurrentPage];
+      const _dots=_hasImg?await renderPageToDots(_page):null;
+      await sendPdfDual(_text, pdfCurrentPage, _dots);
+    } else {
+      // TXT / DOCX / BRF / BRL: 현재 페이지 캐시 직접 사용
+      const _text=pdfPageTexts[pdfCurrentPage]||'';
+      const _dots=pdfPageDots[pdfCurrentPage]||null;
+      await sendPdfDual(_text, pdfCurrentPage, _dots);
+    }
   } else await sendCurrentPage();
 }
 
@@ -2009,8 +2046,11 @@ function setGrade(g){
   const gLabel=g===2?'G2 약자':'G1';
   const gs=document.getElementById('gradeStat');
   if(gs)gs.innerHTML=`등급 <span>${gLabel}</span>`;
-  if(pdfMode) displayPdfPage(pdfCurrentPage);
-  else onTextInput();
+  if(pdfMode){
+    // Grade 변경 시 셀 수 달라지므로 서브페이지 캐시 무효화
+    pdfPageSubTexts={}; pdfCurrentSubPage=0;
+    displayPdfPage(pdfCurrentPage, 0);
+  } else onTextInput();
 }
 function copyUnicode(){
   const t=document.getElementById('unicodeDisplay').textContent;
