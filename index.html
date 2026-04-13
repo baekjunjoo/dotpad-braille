@@ -1,0 +1,2042 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>닷패드 점자 변환 테스트</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+<!-- PDF.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- Mammoth.js (DOCX → 텍스트 추출) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<style>
+/* ── Brand tokens: #faf9f5 #ffffff #e8e6dc #b0aea5 #141413 #d97757 #6a9bcc #788c5d ── */
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Lora','Georgia',serif;background:#faf9f5;color:#141413;min-height:100vh;font-size:15px;line-height:1.6;}
+h1,h2,.label,.section-title,.seg-btn,.dp-btn,.mode-btn,.pnav-btn,.stat,.badge-text,button{font-family:'Poppins','Arial',sans-serif;}
+::-webkit-scrollbar{width:5px;height:5px;}
+::-webkit-scrollbar-track{background:#f0efe9;}
+::-webkit-scrollbar-thumb{background:#d0cec4;border-radius:3px;}
+
+/* ── Header ── */
+.header{background:#fff;border-bottom:1px solid #e8e6dc;padding:16px 28px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10;box-shadow:0 1px 0 #e8e6dc;}
+.header-icon{width:40px;height:40px;background:#d97757;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;color:#fff;}
+.header h1{font-size:18px;font-weight:700;color:#141413;letter-spacing:-0.3px;}
+.header p{font-size:12px;color:#b0aea5;margin-top:1px;font-family:'Lora',serif;}
+
+/* ── Layout ── */
+.main{max-width:960px;margin:0 auto;padding:24px 20px;}
+
+/* ── Cards ── */
+.card{background:#fff;border:1px solid #e8e6dc;border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:0 1px 3px rgba(20,20,19,.05);}
+.section-title{font-size:10px;font-weight:700;color:#b0aea5;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px;}
+.section-title::after{content:'';flex:1;height:1px;background:#e8e6dc;}
+
+/* ── Seg / toggle ── */
+.toggle-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center;}
+.seg{display:flex;background:#f0efe9;border-radius:10px;padding:3px;gap:2px;border:1px solid #e8e6dc;}
+.seg-btn{padding:7px 20px;border-radius:7px;border:none;cursor:pointer;font-size:13px;font-weight:600;color:#b0aea5;background:transparent;transition:all .18s;}
+.seg-btn.active{background:#fff;color:#141413;box-shadow:0 1px 4px rgba(20,20,19,.12);}
+
+/* ── Textarea ── */
+textarea{width:100%;background:#faf9f5;border:1.5px solid #e8e6dc;border-radius:10px;padding:14px 16px;color:#141413;font-size:17px;line-height:1.65;resize:none;outline:none;font-family:'Lora','Georgia',serif;min-height:88px;transition:border-color .18s;}
+textarea:focus{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.1);}
+textarea::placeholder{color:#c8c6bc;}
+.stats-row{display:flex;gap:18px;margin-top:10px;flex-wrap:wrap;}
+.stat{font-size:12px;color:#b0aea5;}
+.stat span{color:#141413;font-weight:600;}
+
+/* ── Live badge ── */
+.live-badge{display:inline-flex;align-items:center;gap:6px;background:#f5f2ee;border:1px solid #e8e6dc;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:600;color:#b0aea5;transition:all .2s;}
+.live-badge.active{background:#eef4e8;border-color:#c4d4a8;color:#788c5d;}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#d0cec4;flex-shrink:0;}
+.live-badge.active .live-dot{background:#788c5d;animation:pulse-g 1.2s infinite;}
+@keyframes pulse-g{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.75)}}
+
+/* ============================================================
+   PDF CARD
+   ============================================================ */
+.pdf-card{background:#fff;border:1.5px solid #e8e6dc;border-radius:14px;padding:22px;margin-bottom:18px;box-shadow:0 1px 3px rgba(20,20,19,.05);}
+
+/* Drop zone */
+.drop-zone{
+  border:2px dashed #e8e6dc;border-radius:12px;
+  padding:32px 20px;text-align:center;cursor:pointer;
+  transition:all .2s;background:#faf9f5;
+  position:relative;
+}
+.drop-zone:hover,.drop-zone.drag-over{border-color:#d97757;background:#fef8f5;}
+.drop-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.drop-icon{font-size:36px;margin-bottom:10px;opacity:.4;}
+.drop-title{font-size:15px;font-weight:600;color:#141413;margin-bottom:4px;}
+.drop-sub{font-size:12px;color:#b0aea5;}
+.drop-btn{
+  display:inline-block;margin-top:12px;
+  background:#d97757;color:#fff;
+  padding:8px 20px;border-radius:9px;
+  font-size:13px;font-weight:600;
+  pointer-events:none;
+}
+
+/* PDF info bar */
+.pdf-info-bar{
+  display:flex;align-items:center;gap:14px;
+  background:#faf9f5;border:1px solid #e8e6dc;
+  border-radius:10px;padding:12px 16px;
+  margin-bottom:14px;flex-wrap:wrap;
+}
+.pdf-filename{font-size:13px;font-weight:600;color:#141413;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pdf-meta{font-size:11px;color:#b0aea5;white-space:nowrap;}
+.pdf-close-btn{background:none;border:1px solid #e8e6dc;color:#b0aea5;border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:600;transition:all .18s;flex-shrink:0;}
+.pdf-close-btn:hover{background:#f0efe9;color:#141413;}
+
+/* PDF page nav */
+.pdf-page-nav{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+.pdf-pnav-btn{background:#fff;border:1px solid #e8e6dc;color:#6a6a65;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;transition:all .18s;}
+.pdf-pnav-btn:not(:disabled):hover{background:#f0efe9;border-color:#d0cec4;}
+.pdf-pnav-btn:disabled{opacity:.3;cursor:not-allowed;}
+.pdf-page-info{flex:1;text-align:center;font-size:13px;font-weight:600;color:#141413;}
+.pdf-page-sub{font-size:11px;color:#b0aea5;display:block;font-weight:400;}
+
+/* 실시간 닷패드 상태 바 */
+.pdf-dotpad-status{
+  display:flex;align-items:center;gap:10px;
+  background:#faf9f5;border:1px solid #e8e6dc;border-radius:9px;
+  padding:9px 14px;margin-bottom:12px;
+  font-size:12px;
+}
+.pdf-dotpad-status .ds-dot{width:8px;height:8px;border-radius:50%;background:#d0cec4;flex-shrink:0;transition:all .2s;}
+.pdf-dotpad-status.sending .ds-dot{background:#d97757;animation:pulse-s .6s infinite;}
+.pdf-dotpad-status.ready   .ds-dot{background:#788c5d;}
+.pdf-dotpad-status.idle    .ds-dot{background:#d0cec4;}
+.pdf-dotpad-status .ds-label{font-weight:600;color:#6a6a65;}
+.pdf-dotpad-status.sending .ds-label{color:#c86030;}
+.pdf-dotpad-status.ready   .ds-label{color:#4a7040;}
+.pdf-dotpad-status .ds-hint{font-size:11px;color:#b0aea5;margin-left:auto;}
+.ds-page-big{font-size:22px;font-weight:700;color:#141413;margin-left:auto;letter-spacing:-0.5px;}
+
+/* PDF page text preview */
+.pdf-text-preview{
+  background:#faf9f5;border:1px solid #e8e6dc;
+  border-radius:10px;padding:14px 16px;
+  font-size:13px;color:#141413;line-height:1.7;
+  max-height:130px;overflow-y:auto;
+  font-family:'Lora','Georgia',serif;
+  white-space:pre-wrap;word-break:break-word;
+}
+.pdf-text-preview.empty{color:#b0aea5;font-style:italic;}
+
+/* Loading */
+.pdf-loading{display:flex;align-items:center;gap:10px;padding:20px;color:#b0aea5;font-size:13px;}
+.spin{width:18px;height:18px;border:2px solid #e8e6dc;border-top-color:#d97757;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Dual mode badge */
+.dual-mode-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  background:#f0f5fe;border:1px solid #c8daf5;
+  border-radius:8px;padding:5px 12px;
+  font-size:11px;font-weight:600;color:#4a7ab5;
+  margin-bottom:14px;
+}
+
+/* View mode indicator (이미지 ↔ 텍스트 뷰 전환 배지) */
+.view-mode-badge{
+  display:inline-flex;align-items:center;gap:7px;
+  border-radius:9px;padding:7px 14px;
+  font-size:12px;font-weight:600;
+  transition:all .25s;width:100%;
+}
+.view-mode-badge.graphic{background:#fef3ee;border:1px solid #f5c8a8;color:#c06030;}
+.view-mode-badge.text{background:#f0f5fe;border:1px solid #c8daf5;color:#3a6a9f;}
+.view-mode-badge .vmode-icon{font-size:15px;}
+.view-mode-badge .vmode-hint{font-size:10px;font-weight:500;margin-left:auto;opacity:.75;}
+
+/* ============================================================
+   DOTPAD CARD
+   ============================================================ */
+.dotpad-card{background:#fff;border:1.5px solid #e8e6dc;border-radius:14px;padding:22px;margin-bottom:18px;position:relative;overflow:hidden;box-shadow:0 1px 3px rgba(20,20,19,.05);}
+.dotpad-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#d97757,#6a9bcc,#788c5d,#d97757);background-size:300%;animation:shimmer 4s linear infinite;}
+@keyframes shimmer{0%{background-position:0%}100%{background-position:300%}}
+
+.dp-top-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+.status-dot{width:9px;height:9px;border-radius:50%;background:#d0cec4;transition:all .3s;flex-shrink:0;}
+.status-dot.disconnected{background:#d0cec4;}
+.status-dot.connecting{background:#e8a87c;box-shadow:0 0 6px rgba(232,168,124,.7);animation:blink .9s infinite;}
+.status-dot.connected{background:#788c5d;box-shadow:0 0 6px rgba(120,140,93,.6);}
+.status-dot.error{background:#c0504a;box-shadow:0 0 6px rgba(192,80,74,.6);}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.status-label{font-size:13px;font-weight:500;color:#6a6a65;}
+.device-badge{background:#f0efe9;border:1px solid #e8e6dc;border-radius:20px;padding:2px 10px;font-size:11px;font-weight:600;color:#6a6a65;}
+.ble-warn{background:#fef5f0;border:1px solid #f5c8b8;border-radius:8px;padding:10px 14px;font-size:12px;color:#a05a3a;margin-bottom:14px;}
+
+.dp-btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;}
+.dp-btn{padding:9px 18px;border-radius:9px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .18s;display:flex;align-items:center;gap:5px;}
+.dp-btn:disabled{opacity:.35;cursor:not-allowed;}
+.dp-btn-connect{background:#d97757;color:#fff;}
+.dp-btn-connect:not(:disabled):hover{background:#c86a48;box-shadow:0 3px 10px rgba(217,119,87,.35);}
+.dp-btn-disconnect{background:#f0efe9;border:1px solid #e8e6dc;color:#6a6a65;}
+.dp-btn-disconnect:not(:disabled):hover{background:#e8e6dc;color:#141413;}
+.dp-btn-send{background:#6a9bcc;color:#fff;}
+.dp-btn-send:not(:disabled):hover{background:#5a8abb;box-shadow:0 3px 10px rgba(106,155,204,.35);}
+.dp-btn-send.sending{background:#8ab5d8;animation:pulse-s .8s infinite;}
+@keyframes pulse-s{0%,100%{opacity:1}50%{opacity:.65}}
+
+.mode-selector{display:flex;background:#f0efe9;border:1px solid #e8e6dc;border-radius:9px;padding:3px;gap:2px;width:fit-content;margin-bottom:16px;}
+.mode-btn{padding:6px 15px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;color:#b0aea5;background:transparent;transition:all .18s;}
+.mode-btn.active{background:#fff;color:#141413;box-shadow:0 1px 4px rgba(20,20,19,.1);}
+
+/* ── Dual preview panel ── */
+.dual-preview{background:#faf9f5;border:1px solid #e8e6dc;border-radius:12px;overflow:hidden;margin-bottom:14px;}
+.preview-section{padding:14px 16px;}
+.preview-section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.preview-section-label{font-size:10px;font-weight:700;color:#b0aea5;letter-spacing:.08em;text-transform:uppercase;}
+.preview-section-badge{font-size:10px;font-weight:600;color:#d97757;background:#fef3ee;border:1px solid #f5d4c4;border-radius:20px;padding:2px 8px;}
+.preview-section-sub{font-size:10px;color:#c8c6bc;font-weight:500;}
+.preview-divider{height:1px;background:#e8e6dc;margin:0;}
+/* Text strip */
+.preview-label{font-size:10px;font-weight:700;color:#b0aea5;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;}
+
+.text-strip{display:flex;gap:3px;flex-wrap:wrap;}
+.dp-cell-sm{display:grid;grid-template-columns:repeat(2,9px);grid-template-rows:repeat(3,9px);gap:2px;padding:4px;background:#fff;border:1px solid #e8e6dc;border-radius:5px;}
+.dp-dot-sm{width:7px;height:7px;border-radius:50%;}
+.dp-dot-sm.on{background:#d97757;box-shadow:0 0 3px rgba(217,119,87,.5);}
+.dp-dot-sm.off{background:#f0efe9;}
+
+.gp-cell{display:grid;grid-template-columns:repeat(2,6px);grid-template-rows:repeat(4,6px);gap:1px;padding:3px;background:#fff;border:1px solid #ece9e0;border-radius:3px;}
+.gp-dot{width:4px;height:4px;border-radius:50%;}
+.gp-dot.on{background:#d97757;box-shadow:0 0 2px rgba(217,119,87,.6);}
+.gp-dot.off{background:#f0efe9;}
+.gp-dot.cursor{background:#e8e6dc;}  /* dot7, dot8 커서 자리 — 항상 꺼짐 */
+
+/* ── 셀 힌트 (점자 아래 원문 글자 표시) ── */
+.cell-col-g{display:flex;flex-direction:column;align-items:center;gap:1px;}
+.cell-col-t{display:flex;flex-direction:column;align-items:center;gap:1px;}
+.cell-hint-g{
+  font-size:8px;color:#6a9bcc;text-align:center;
+  width:20px;height:12px;line-height:12px;
+  overflow:hidden;font-family:'Poppins','Arial',sans-serif;
+  font-weight:600;white-space:nowrap;
+}
+.cell-hint-t{
+  font-size:9px;color:#6a9bcc;text-align:center;
+  width:22px;height:13px;line-height:13px;
+  overflow:hidden;font-family:'Poppins','Arial',sans-serif;
+  font-weight:600;white-space:nowrap;
+}
+.cell-hint-g.empty,.cell-hint-t.empty{visibility:hidden;}
+/* 힌트 표시 영역 헤더 */
+.hint-toggle-btn{
+  font-size:10px;font-weight:600;color:#b0aea5;background:none;
+  border:1px solid #e8e6dc;border-radius:6px;padding:2px 8px;cursor:pointer;
+  transition:all .18s;
+}
+.hint-toggle-btn:hover{background:#f0efe9;color:#6a9bcc;}
+.hint-toggle-btn.active{background:#eef4fb;border-color:#c0d8f0;color:#4a7ab5;}
+
+.page-nav{display:flex;align-items:center;gap:10px;background:#faf9f5;border:1px solid #e8e6dc;border-radius:9px;padding:8px 14px;margin-top:14px;}
+.pnav-btn{background:#fff;border:1px solid #e8e6dc;color:#6a6a65;padding:5px 12px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:700;transition:all .18s;}
+.pnav-btn:not(:disabled):hover{background:#f0efe9;border-color:#d0cec4;color:#141413;}
+.pnav-btn:disabled{opacity:.3;cursor:not-allowed;}
+.pnav-info{flex:1;text-align:center;font-size:12px;color:#b0aea5;}
+.pnav-cells{font-size:10px;color:#c8c6bc;}
+
+.send-log{background:#faf9f5;border:1px solid #e8e6dc;border-radius:8px;padding:9px 13px;font-size:11px;color:#b0aea5;font-family:'SF Mono','Consolas',monospace;line-height:1.7;max-height:70px;overflow-y:auto;margin-top:14px;white-space:pre-wrap;}
+.log-ok{color:#788c5d;font-weight:600;}
+.log-err{color:#c0504a;font-weight:600;}
+.log-info{color:#b0aea5;}
+.log-key{color:#c8963a;font-weight:600;}
+.log-send{color:#6a9bcc;font-weight:600;}
+
+/* ── Braille visualizer ── */
+.cells-container{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;min-height:80px;}
+.cell-group{display:flex;flex-direction:column;align-items:center;gap:3px;}
+.cell-char{font-size:10px;color:#b0aea5;height:14px;text-align:center;}
+.braille-cell{display:grid;grid-template-columns:repeat(2,13px);grid-template-rows:repeat(3,13px);gap:3px;padding:7px;background:#faf9f5;border:1.5px solid #e8e6dc;border-radius:8px;transition:border-color .15s;cursor:default;}
+.braille-cell:hover{border-color:#d97757;}
+.dot{width:9px;height:9px;border-radius:50%;transition:background .12s;}
+.dot.on{background:#d97757;box-shadow:0 0 4px rgba(217,119,87,.45);}
+.dot.off{background:#ece9e0;border:1px solid #e0ddd4;}
+.cell-unicode{font-size:10px;color:#c8c6bc;text-align:center;height:14px;font-family:monospace;}
+.space-cell{display:flex;align-items:center;justify-content:center;padding:7px;width:43px;height:58px;border-radius:8px;background:#faf9f5;border:1.5px dashed #e0ddd4;}
+.space-label{font-size:8px;color:#c8c6bc;}
+.empty-state{text-align:center;padding:36px 20px;color:#c8c6bc;}
+.empty-icon{font-size:36px;margin-bottom:10px;opacity:.4;}
+.empty-state p{font-size:13px;}
+
+.unicode-display{background:#faf9f5;border:1.5px solid #e8e6dc;border-radius:10px;padding:14px 16px;font-size:26px;line-height:1.5;letter-spacing:4px;min-height:60px;color:#141413;word-break:break-all;}
+.unicode-copy{display:flex;align-items:center;justify-content:space-between;margin-top:9px;}
+.copy-btn{background:#f0efe9;border:1px solid #e8e6dc;color:#6a6a65;padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;transition:all .18s;}
+.copy-btn:hover{background:#e8e6dc;color:#141413;}
+.copy-btn.copied{background:#eef4e8;border-color:#c4d4a8;color:#788c5d;}
+
+.breakdown-scroll{overflow-x:auto;padding-bottom:6px;}
+.breakdown-row{display:flex;gap:0;min-width:max-content;}
+.breakdown-char{display:flex;flex-direction:column;align-items:center;border-right:1px solid #e8e6dc;padding:0 10px;}
+.breakdown-char:last-child{border-right:none;}
+.bd-original{font-size:17px;color:#141413;padding:7px 0 4px;font-weight:600;}
+.bd-cells{display:flex;gap:2px;padding:3px 0;}
+.bd-mini-cell{display:grid;grid-template-columns:repeat(2,7px);grid-template-rows:repeat(3,7px);gap:2px;padding:2px;background:#faf9f5;border:1px solid #e8e6dc;border-radius:3px;}
+.bd-mini-dot{width:5px;height:5px;border-radius:50%;}
+.bd-mini-dot.on{background:#d97757;}
+.bd-mini-dot.off{background:#ece9e0;}
+.bd-unicode{font-size:15px;color:#6a9bcc;padding:3px 0 6px;}
+.bd-type{font-size:9px;color:#c8c6bc;padding-bottom:3px;}
+
+.info-bar{background:#fff;border:1px solid #e8e6dc;border-radius:12px;padding:12px 18px;display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#b0aea5;margin-bottom:18px;}
+.info-item{display:flex;align-items:center;gap:7px;}
+.dot-diagram{display:grid;grid-template-columns:repeat(2,11px);grid-template-rows:repeat(3,11px);gap:2px;}
+.dd{width:9px;height:9px;border-radius:50%;background:#e8e6dc;display:flex;align-items:center;justify-content:center;font-size:6px;color:#b0aea5;font-weight:700;}
+.disclaimer{background:#fef9f5;border:1px solid #f0ddd4;border-radius:9px;padding:11px 14px;font-size:11px;color:#c09070;margin-top:6px;line-height:1.6;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">⠿</div>
+  <div>
+    <h1>닷패드 점자 변환 테스트</h1>
+    <p>텍스트 · PDF 입력 → 실시간 점자 변환 → 닷패드 자동 출력</p>
+  </div>
+</div>
+
+<div class="main">
+
+<!-- ============================================================
+     DOTPAD CONNECTION
+     ============================================================ -->
+<div class="dotpad-card">
+  <div class="section-title">닷패드 연결 · BLE</div>
+  <div id="bleWarn" class="ble-warn" style="display:none">⚠️ Web Bluetooth를 지원하지 않습니다. <strong>Chrome</strong> 브라우저를 사용해주세요.</div>
+
+  <div class="dp-top-row">
+    <div class="status-dot disconnected" id="statusDot"></div>
+    <span class="status-label" id="statusLabel">연결되지 않음</span>
+    <span class="device-badge" id="deviceBadge" style="display:none"></span>
+    <div class="live-badge" id="liveBadge">
+      <div class="live-dot"></div>
+      <span id="liveText" class="badge-text">대기 중</span>
+    </div>
+  </div>
+
+  <div class="dp-btn-row">
+    <button class="dp-btn dp-btn-connect" id="connectBtn" onclick="connectDotPad()">⬤&nbsp;BLE 연결</button>
+    <button class="dp-btn dp-btn-disconnect" id="disconnectBtn" onclick="disconnectDotPad()" disabled>✕&nbsp;연결 끊기</button>
+    <button class="dp-btn dp-btn-send" id="sendBtn" onclick="manualSend()" disabled>▶&nbsp;지금 전송</button>
+  </div>
+
+  <!-- PDF 듀얼 모드 안내 -->
+  <div class="dual-mode-badge" id="dualBadge" style="display:none">
+    📄 PDF 모드 — 그래픽(300셀): 본문 텍스트 &nbsp;·&nbsp; 텍스트(20셀): 페이지 번호
+  </div>
+
+  <!-- 통합 미리보기: 그래픽 + 텍스트 동시 표시 -->
+  <div class="dual-preview">
+
+    <!-- ① 그래픽 영역 (300셀) -->
+    <div class="preview-section">
+      <div class="preview-section-header">
+        <span class="preview-section-label">그래픽 영역 · 300셀 (10줄 × 30)</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <button class="hint-toggle-btn active" id="hintToggleBtn" onclick="toggleHints()">🔤 힌트 ON</button>
+          <span class="preview-section-badge" id="graphicActiveBadge">0셀 활성</span>
+        </div>
+      </div>
+      <div id="graphicPreviewPanel"></div>
+    </div>
+
+    <div class="preview-divider"></div>
+
+    <!-- ② 텍스트 영역 (20셀) -->
+    <div class="preview-section">
+      <div class="preview-section-header">
+        <span class="preview-section-label">텍스트 영역 · 20셀</span>
+        <span class="preview-section-sub" id="textAreaSub">페이지 번호 / 짧은 텍스트</span>
+      </div>
+      <div id="textPreviewPanel"></div>
+    </div>
+
+  </div>
+
+  <!-- 전송 대상 선택 (수동 텍스트 입력 시) -->
+  <div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;" id="modeSelectorRow">
+    <span style="font-size:11px;color:#b0aea5;font-weight:600;">수동 입력 전송 대상</span>
+    <div class="mode-selector" style="margin-bottom:0;">
+      <button class="mode-btn active" id="modeText" onclick="setDisplayMode('text')">텍스트 · 20셀</button>
+      <button class="mode-btn" id="modeGraphic" onclick="setDisplayMode('graphic')">그래픽 · 300셀</button>
+    </div>
+  </div>
+
+  <div class="page-nav">
+    <button class="pnav-btn" id="prevBtn" onclick="prevPage()" disabled>◀</button>
+    <div class="pnav-info">
+      <div id="pageInfoText">페이지 1 / 1</div>
+      <div class="pnav-cells" id="pageInfoCells"></div>
+    </div>
+    <button class="pnav-btn" id="nextBtn" onclick="nextPage()" disabled>▶</button>
+  </div>
+
+  <div class="send-log" id="sendLog"><span class="log-info">Chrome 브라우저에서 BLE 연결 버튼을 눌러 닷패드와 연결하세요.</span></div>
+</div>
+
+<!-- ============================================================
+     PDF UPLOAD
+     ============================================================ -->
+<div class="pdf-card">
+  <div class="section-title">문서 불러오기 · PDF / DOCX / TXT</div>
+
+  <!-- Drop zone (shown when no file loaded) -->
+  <div id="dropZoneWrap">
+    <div class="drop-zone" id="dropZone"
+      ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <input type="file" accept=".pdf,.docx,.doc,.txt,.brf,.brl" onchange="onFileSelect(event)">
+      <div class="drop-icon">📂</div>
+      <div class="drop-title">파일을 여기에 드래그하거나 클릭</div>
+      <div class="drop-sub" style="margin-bottom:10px;">점자로 변환하여 닷패드에 출력합니다</div>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+        <span style="background:#fef3ee;border:1px solid #f5c8a8;color:#c06030;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">📄 PDF</span>
+        <span style="background:#f0f5fe;border:1px solid #c8daf5;color:#3a6a9f;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">📝 DOCX</span>
+        <span style="background:#eef4e8;border:1px solid #c4d4a8;color:#4a6a30;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">📃 TXT</span>
+        <span style="background:#f5f0fe;border:1px solid #d4b8f5;color:#6a30a0;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ BRF</span>
+        <span style="background:#fef0f8;border:1px solid #f5b8df;color:#a03070;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ BRL</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading state -->
+  <div class="pdf-loading" id="pdfLoading" style="display:none">
+    <div class="spin"></div>
+    <span id="pdfLoadingText">PDF 불러오는 중...</span>
+  </div>
+
+  <!-- PDF loaded state -->
+  <div id="pdfLoadedWrap" style="display:none">
+    <div class="pdf-info-bar">
+      <span class="pdf-filename" id="pdfFilename">파일명.pdf</span>
+      <span class="pdf-meta" id="pdfMeta">0페이지</span>
+      <button class="pdf-close-btn" onclick="closePdf()">✕ 닫기</button>
+    </div>
+
+    <!-- PDF page lang + grade toggle -->
+    <div class="toggle-row" style="margin-bottom:12px;">
+      <span style="font-size:12px;color:#b0aea5;font-weight:600;">점역 언어</span>
+      <div class="seg">
+        <button class="seg-btn active" id="pdfBtnKo" onclick="setPdfLang('ko')">🇰🇷 한국어</button>
+        <button class="seg-btn" id="pdfBtnEn" onclick="setPdfLang('en')">🇺🇸 English</button>
+      </div>
+      <div class="seg">
+        <button class="seg-btn active" id="pdfBtnG1" onclick="setGrade(1)" title="Grade 1 완전풀기">G1</button>
+        <button class="seg-btn" id="pdfBtnG2" onclick="setGrade(2)" title="Grade 2 약자">G2</button>
+      </div>
+    </div>
+
+    <!-- PDF page nav -->
+    <div class="pdf-page-nav">
+      <button class="pdf-pnav-btn" id="pdfPrevBtn" onclick="prevPdfPage()" disabled>◀ 이전</button>
+      <div style="flex:1;text-align:center;">
+        <div class="pdf-page-info" id="pdfPageInfo">1 / 1</div>
+        <span class="pdf-page-sub" id="pdfPageSub"></span>
+      </div>
+      <button class="pdf-pnav-btn" id="pdfNextBtn" onclick="nextPdfPage()">다음 ▶</button>
+    </div>
+
+    <!-- 닷패드 실시간 연동 상태 바 -->
+    <div class="pdf-dotpad-status idle" id="pdfDotpadStatus">
+      <div class="ds-dot"></div>
+      <span class="ds-label" id="dsLabel">닷패드 대기</span>
+      <span class="ds-hint" id="dsHint">패닝키 ◀▶ 로 페이지 이동</span>
+      <span class="ds-page-big" id="dsPageBig">—</span>
+    </div>
+
+    <!-- View mode indicator: 이미지 페이지에서만 표시 -->
+    <div id="viewModeBadgeWrap" style="display:none;margin-bottom:12px;">
+      <div class="view-mode-badge graphic" id="viewModeBadge">
+        <span class="vmode-icon" id="viewModeIcon">🖼</span>
+        <span id="viewModeLabel">이미지 보기</span>
+        <span class="vmode-hint" id="viewModeHint">패닝키 ▶ → 텍스트 전환</span>
+      </div>
+    </div>
+
+    <!-- Page text preview -->
+    <div class="pdf-text-preview" id="pdfTextPreview">텍스트를 불러오는 중...</div>
+  </div>
+</div>
+
+<!-- ============================================================
+     MANUAL TEXT INPUT
+     ============================================================ -->
+<div class="info-bar">
+  <div class="info-item">
+    <div class="dot-diagram">
+      <div class="dd">1</div><div class="dd">4</div>
+      <div class="dd">2</div><div class="dd">5</div>
+      <div class="dd">3</div><div class="dd">6</div>
+    </div>
+    <span>핀 번호 배치</span>
+  </div>
+  <div class="info-item">
+    <div style="width:10px;height:10px;border-radius:50%;background:#d97757;box-shadow:0 0 4px rgba(217,119,87,.4)"></div>
+    <span>올라온 핀</span>
+  </div>
+  <div class="info-item">
+    <div style="width:10px;height:10px;border-radius:50%;background:#ece9e0;border:1px solid #e0ddd4"></div>
+    <span>내려간 핀</span>
+  </div>
+  <div class="info-item" style="margin-left:auto">
+    <span id="langInfo" style="font-size:12px;font-weight:600;color:#6a6a65">현재: 한국어 점자</span>
+  </div>
+</div>
+
+<div class="toggle-row">
+  <div class="seg">
+    <button class="seg-btn active" id="btnKo" onclick="setLang('ko')">🇰🇷 한국어</button>
+    <button class="seg-btn" id="btnEn" onclick="setLang('en')">🇺🇸 English</button>
+  </div>
+  <div class="seg">
+    <button class="seg-btn active" id="btnG1" onclick="setGrade(1)" title="Grade 1: 완전풀기 (모든 음절 그대로 표기)">G1 완전</button>
+    <button class="seg-btn" id="btnG2" onclick="setGrade(2)" title="Grade 2: 약자 (UEB 약자 / 한국어 약어)">G2 약자</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">텍스트 직접 입력</div>
+  <textarea id="textInput"
+    placeholder="텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다..."
+    oninput="onTextInput()"
+    maxlength="400"></textarea>
+  <div class="stats-row">
+    <div class="stat">글자 <span id="charCount">0</span></div>
+    <div class="stat">점자 셀 <span id="cellCount">0</span></div>
+    <div class="stat" id="langStat">모드 <span>한국어</span></div>
+    <div class="stat" id="gradeStat">등급 <span>G1</span></div>
+    <div class="stat">닷패드 페이지 <span id="totalPagesStat">1</span></div>
+  </div>
+</div>
+
+<!-- ============================================================
+     BRAILLE VISUALIZER
+     ============================================================ -->
+<div class="card">
+  <div class="section-title">점자 셀 시각화</div>
+  <div class="cells-container" id="cellsDisplay">
+    <div class="empty-state"><div class="empty-icon">⠿</div><p>텍스트를 입력하거나 PDF를 불러오면 점자 셀이 표시됩니다</p></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">유니코드 점자 출력</div>
+  <div class="unicode-display" id="unicodeDisplay"><span style="color:#c8c6bc;font-size:14px;">점자 유니코드 문자가 여기에 표시됩니다</span></div>
+  <div class="unicode-copy">
+    <span style="font-size:11px;color:#b0aea5;">닷패드 SDK에 전달되는 점자 데이터</span>
+    <button class="copy-btn" id="copyBtn" onclick="copyUnicode()">복사</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-title">글자별 상세 분석</div>
+  <div class="breakdown-scroll"><div class="breakdown-row" id="breakdownDisplay"></div></div>
+</div>
+
+<div class="disclaimer">
+  ⚠️ 이 페이지의 점자 변환은 한국 점자 규정 및 영어 Grade 1 점자 표준 기반입니다. 쌍자음(ㄲ,ㄸ,ㅃ,ㅆ,ㅉ)은 근사값으로 표시되며, 실제 닷패드 출력(liblouis)과 세부 결과가 다를 수 있습니다.
+</div>
+
+</div><!-- /main -->
+
+<script>
+// ============================================================
+// PDF.js 설정
+// ============================================================
+if(typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+// ============================================================
+// 브레일 테이블
+// ============================================================
+const EN_BRAILLE={'a':1,'b':3,'c':9,'d':25,'e':17,'f':11,'g':27,'h':19,'i':10,'j':26,'k':5,'l':7,'m':13,'n':29,'o':21,'p':15,'q':31,'r':23,'s':14,'t':30,'u':37,'v':39,'w':58,'x':45,'y':61,'z':53,'1':1,'2':3,'3':9,'4':25,'5':17,'6':11,'7':27,'8':19,'9':10,'0':26,',':2,';':6,':':18,'.':50,'!':22,'?':38,"'":4,'-':36,' ':0};
+const EN_NUM_PREFIX=60;
+
+// ── English Grade 2 (UEB) ────────────────────────────────────
+// 단어 전체 약자: 해당 단어 단독 사용 시 단일 셀로 치환
+const EN_G2_WORDS={
+  // 4가지 특수 단어 약자 (UEB strong contractions)
+  'and':47,'for':63,'of':55,'the':46,'with':62,
+  // 알파벳 단일 셀 단어 약자 (word sign)
+  'but':3,'can':9,'do':25,'every':17,'from':11,
+  'go':27,'have':19,'just':26,'knowledge':5,'like':7,
+  'more':13,'not':29,'people':15,'quite':31,'rather':23,
+  'so':14,'that':30,'us':37,'very':39,'will':58,
+  'it':45,'you':61,'as':53
+};
+// 단어 내 부분 약자: 긴 패턴 우선 (greedy)
+// [패턴, 6점 bitmask]
+const EN_G2_PARTIAL=[
+  ['ing',44],   // ⠬ dots 3,4,6
+  ['ble',60],   // ⠼ dots 3,4,5,6
+  ['ch', 33],   // ⠡ dots 1,6
+  ['sh', 41],   // ⠩ dots 1,4,6
+  ['th', 57],   // ⠹ dots 1,4,5,6
+  ['wh', 49],   // ⠱ dots 1,5,6
+  ['ou', 51],   // ⠳ dots 1,2,5,6
+  ['gh', 35],   // ⠣ dots 1,2,6
+  ['er', 59],   // ⠻ dots 1,2,4,5,6
+  ['ed', 43],   // ⠫ dots 1,2,4,6
+  ['ar', 28],   // ⠜ dots 3,4,5
+  ['st', 12],   // ⠌ dots 3,4
+  ['ow', 42],   // ⠪ dots 2,4,6
+  ['en', 34],   // ⠢ dots 2,6
+];
+
+// ── Korean Grade 2 (약어 - 단어 약자) ────────────────────────
+// 한국어 빈출 단어를 짧은 점자 형태로 축약 (유효한 Grade-1 셀 사용)
+// [원본 단어, 약어 형태] — 길이 내림차순 (greedy match)
+const KO_G2_WORD_MAP=[
+  ['그러므로','그므'],['왜냐하면','왜면'],
+  ['그래서','그서'],  ['그러나','그나'],  ['그리고','그고'],
+  ['하지만','하만'],  ['그러면','그면'],  ['때문에','때에'],
+  ['따라서','따서'],  ['그래도','그도'],  ['그러한','그한'],
+  ['이러한','이한'],  ['저러한','저한'],
+  ['있습니다','있다'],['없습니다','없다'],
+  ['합니다','한다'],  ['됩니다','된다'],  ['입니다','이다'],
+  ['했습니다','했다'],['않습니다','않다'],['겠습니다','겠다'],
+  ['것입니다','것다'], ['되었다','됐다'],  ['하였다','했다'],
+  ['것이다','것다'],  ['수있다','있다'],
+];
+
+const CHOSEONG=[[8],[8,8],[9],[10],[10,10],[11],[17],[24],[24,24],[16],[16,16],[],[19],[19,19],[27],[40],[48],[56],[58]];
+const JUNGSEONG=[[35],[28],[39],[60],[46],[22],[45],[54],[37],[37,35],[37,28],[37,61],[57],[38],[38,46],[38,22],[38,61],[62],[30],[30,61],[61]];
+const JONGSEONG=[[],[8],[8,8],[8,16],[9],[9,19],[9,58],[10],[11],[11,8],[11,17],[11,24],[11,16],[11,48],[11,56],[11,58],[17],[24],[24,16],[16],[16,16],[62],[19],[27],[40],[48],[56],[58]];
+
+// ============================================================
+// BLE 상수
+// ============================================================
+const BLE_SVC='49535343-fe7d-4ae5-8fa9-9fafd205e455';
+const BLE_CHAR='49535343-1e4d-4bd9-ba61-23c647249616';
+const MODE_TEXT=0x80, MODE_GRAPHIC=0x00;
+const CELLS_TEXT=20, CELLS_PER_LINE=30, LINES_PER_SCR=10;
+const CELLS_GRAPHIC=CELLS_PER_LINE*LINES_PER_SCR; // 300
+
+// ============================================================
+// 상태
+// ============================================================
+let lang='ko', dispMode='text', allCells=[], dotpadPage=0;
+let grade=1; // 1=Grade1(완전풀기), 2=Grade2(약자)
+let bleDevice=null, bleChar=null, isSending=false;
+let sendVersion=0;   // 전송 버전 — 증가 시 진행 중인 전송 즉시 취소
+let autoTimer=null, autoEnabled=false;
+
+// PDF 상태
+let pdfDoc=null, pdfLang='ko';
+let pdfCurrentPage=1, pdfTotalPages=0;
+let pdfPageTexts={};      // {pageNum: string} 텍스트 캐시
+let docType='none';       // 'pdf' | 'docx' | 'txt' — 현재 로드된 파일 타입
+let pdfPageDots={};       // {pageNum: Uint8Array(300)} 이미지→도트 캐시
+let pdfPageHasImg={};     // {pageNum: boolean} 이미지 포함 여부 캐시
+let pdfMode=false;
+let pdfViewMode='graphic'; // 현재 페이지 뷰: 'graphic'(이미지) | 'text'(본문)
+let pdfCurrentSubPage=0;   // 현재 서브페이지 인덱스 (PDF 텍스트 long page 분할, 0-based)
+let pdfPageSubTexts={};    // {pageNum: string[]} 서브페이지 텍스트 캐시 (PDF 텍스트 전용)
+
+// 두 영역의 셀 (통합 미리보기용)
+let textLineCells=[];      // 텍스트 20셀 영역
+let graphicCellHints=[];   // 그래픽 영역 셀 힌트 (원문 글자, null=이어지는 셀)
+let textCellHints=[];      // 텍스트 영역 셀 힌트
+let showHints=true;        // 힌트 표시 여부
+// allCells 는 그래픽 영역 (300셀) 으로 사용
+
+// ============================================================
+// 변환 함수
+// ============================================================
+// ── 셀 힌트 배열 빌더 ─────────────────────────────────────────
+// text → 셀 인덱스별 힌트 배열 반환 (첫 셀 = 원문 글자, 이어지는 셀 = null)
+function buildCellHints(text, language){
+  if(!text) return [];
+  const result=convertText(text, language);
+  const hints=[];
+  for(const item of result){
+    if(item.cells.length===0) continue;
+    // 공백은 '·', 나머지는 원문 글자
+    hints.push(item.type==='space'?'·':item.orig);
+    for(let i=1;i<item.cells.length;i++) hints.push(null);
+  }
+  return hints;
+}
+function toggleHints(){
+  showHints=!showHints;
+  const btn=document.getElementById('hintToggleBtn');
+  if(btn){btn.classList.toggle('active',showHints);btn.textContent=showHints?'🔤 힌트 ON':'🔤 힌트 OFF';}
+  // 현재 미리보기 재렌더
+  if(pdfMode) return; // PDF 모드는 다음 sendPdfDual에서 반영
+  renderBothPreviews(getPageCells(), textLineCells, graphicCellHints.slice(dotpadPage*cellsPerPage(), (dotpadPage+1)*cellsPerPage()), textCellHints);
+}
+
+const DOT_ORDER=[1,4,2,5,3,6];           // 6점셀 순서 (텍스트 영역 미리보기)
+const DOT_ORDER_8=[1,4,2,5,3,6,7,8];    // 8점셀 순서 (그래픽 영역 미리보기)
+function bitmaskToDots(v){const d=[];for(let i=0;i<8;i++)if(v&(1<<i))d.push(i+1);return d;}
+
+// ── 6점 → 8점 셀 인코딩 변환 (그래픽 영역 BLE 전송 전 적용) ─────────
+// DotPad 8점셀 bit 배치:
+//   bit0=dot1, bit1=dot2, bit2=dot3  (왼쪽 열)
+//   bit3=dot7(커서/항상0),           ← 여기가 핵심 차이
+//   bit4=dot4, bit5=dot5, bit6=dot6  (오른쪽 열)
+//   bit7=dot8(커서/항상0)
+// 6점 bit3-5(dots 4-6) → 8점 bit4-6 으로 1비트 왼쪽 시프트
+function cell6to8(v){
+  return (v & 0x07) | ((v & 0x38) << 1);
+  // 0x07=0b00000111 : dots 1-3 (왼쪽 열) 그대로
+  // 0x38=0b00111000 : dots 4-6 (오른쪽 열) → shift left 1 → bit4-6
+  // bit3, bit7 = 0  → dot7, dot8(커서) 자동으로 꺼짐
+}
+function toUnicode(v){return String.fromCodePoint(0x2800+v);}
+function isHangul(c){const n=c.charCodeAt(0);return n>=0xAC00&&n<=0xD7A3;}
+function decompose(c){const n=c.charCodeAt(0)-0xAC00;return{cho:Math.floor(n/28/21),jung:Math.floor(n/28)%21,jong:n%28};}
+
+// ── English Grade 2 변환 ────────────────────────────────────
+function applyEnG2Partial(word){
+  const result=[]; let i=0; const lo=word.toLowerCase();
+  while(i<lo.length){
+    let matched=false;
+    for(const [pat,val] of EN_G2_PARTIAL){
+      if(lo.startsWith(pat,i)){
+        result.push({orig:word.slice(i,i+pat.length),label:pat,cells:[{v:val,d:bitmaskToDots(val)}],type:'g2partial'});
+        i+=pat.length; matched=true; break;
+      }
+    }
+    if(!matched){
+      const ch=word[i],c=ch.toLowerCase(),v=EN_BRAILLE[c];
+      if(v!==undefined){
+        const cells=[];
+        if(ch!==c)cells.push({v:32,d:[6]});
+        cells.push({v,d:bitmaskToDots(v)});
+        result.push({orig:ch,label:ch,cells,type:'letter'});
+      }else result.push({orig:ch,label:ch,cells:[],type:'unknown'});
+      i++;
+    }
+  }
+  return result;
+}
+
+function convertEnG2(text){
+  const res=[]; let i=0;
+  while(i<text.length){
+    const ch=text[i];
+    if(ch===' '||ch==='\n'||ch==='\t'){
+      res.push({orig:ch,label:'␣',cells:[{v:0,d:[]}],type:'space'});
+      i++; continue;
+    }
+    // 숫자 연속
+    if(/[0-9]/.test(ch)){
+      const cells=[]; let pn=false,j=i;
+      while(j<text.length&&/[0-9]/.test(text[j])){
+        if(!pn)cells.push({v:EN_NUM_PREFIX,d:bitmaskToDots(EN_NUM_PREFIX)});
+        const v=EN_BRAILLE[text[j]]||0;
+        cells.push({v,d:bitmaskToDots(v)});
+        pn=true; j++;
+      }
+      res.push({orig:text.slice(i,j),label:text.slice(i,j),cells,type:'digit'});
+      i=j; continue;
+    }
+    // 단어: 전체 약자 우선, 없으면 부분 약자 적용
+    if(/[a-zA-Z']/.test(ch)){
+      let j=i;
+      while(j<text.length&&/[a-zA-Z']/.test(text[j]))j++;
+      const word=text.slice(i,j);
+      const wl=word.toLowerCase().replace(/'/g,'');
+      if(EN_G2_WORDS[wl]!==undefined){
+        const v=EN_G2_WORDS[wl];
+        const cells=[];
+        if(word[0]>='A'&&word[0]<='Z')cells.push({v:32,d:[6]}); // 대문자 인디케이터
+        cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:word,label:word,cells,type:'g2word'});
+      }else{
+        res.push(...applyEnG2Partial(word));
+      }
+      i=j; continue;
+    }
+    // 기타 문자
+    const lo=ch.toLowerCase(),v=EN_BRAILLE[lo];
+    if(v!==undefined){
+      const cells=[];
+      if(ch!==lo)cells.push({v:32,d:[6]});
+      cells.push({v,d:bitmaskToDots(v)});
+      res.push({orig:ch,label:ch,cells,type:'punct'});
+    }else res.push({orig:ch,label:ch,cells:[],type:'unknown'});
+    i++;
+  }
+  return res;
+}
+
+// ── Korean Grade 2 변환 ───────────────────────────────────────
+function convertKoG2(text){
+  const res=[]; let i=0,prevNum=false;
+  while(i<text.length){
+    const ch=text[i];
+    if(ch===' '||ch==='\n'||ch==='\t'){
+      res.push({orig:ch,label:'␣',cells:[{v:0,d:[]}],type:'space'});
+      prevNum=false; i++; continue;
+    }
+    // 단어 약자 (greedy, 길이 내림차순)
+    let matched=false;
+    for(const [orig,abbrev] of KO_G2_WORD_MAP){
+      if(text.startsWith(orig,i)){
+        const cells=[];
+        for(const ac of abbrev){
+          if(isHangul(ac)){
+            const{cho,jung,jong}=decompose(ac);
+            for(const v of CHOSEONG[cho])cells.push({v,d:bitmaskToDots(v)});
+            for(const v of JUNGSEONG[jung])cells.push({v,d:bitmaskToDots(v)});
+            for(const v of JONGSEONG[jong])cells.push({v,d:bitmaskToDots(v)});
+          }else if(ac!==' '){
+            const v=EN_BRAILLE[ac.toLowerCase()];
+            if(v!==undefined)cells.push({v,d:bitmaskToDots(v)});
+          }
+        }
+        res.push({orig,label:orig+'→'+abbrev,cells,type:'g2word'});
+        prevNum=false; i+=orig.length; matched=true; break;
+      }
+    }
+    if(!matched){
+      if(isHangul(ch)){
+        prevNum=false;
+        const{cho,jung,jong}=decompose(ch);
+        const cells=[];
+        for(const v of CHOSEONG[cho])cells.push({v,d:bitmaskToDots(v)});
+        for(const v of JUNGSEONG[jung])cells.push({v,d:bitmaskToDots(v)});
+        for(const v of JONGSEONG[jong])cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'hangul'});
+      }else if(/[0-9]/.test(ch)){
+        const cells=[];
+        if(!prevNum)cells.push({v:EN_NUM_PREFIX,d:bitmaskToDots(EN_NUM_PREFIX)});
+        const v=EN_BRAILLE[ch]||0;
+        cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'digit'});
+        prevNum=true;
+      }else{
+        prevNum=false;
+        const lo=ch.toLowerCase(),v=EN_BRAILLE[lo];
+        if(v!==undefined){
+          const cells=[];
+          if(ch!==lo)cells.push({v:32,d:[6]});
+          cells.push({v,d:bitmaskToDots(v)});
+          res.push({orig:ch,label:ch,cells,type:'latin'});
+        }else res.push({orig:ch,label:ch,cells:[],type:'unknown'});
+      }
+      i++;
+    }
+  }
+  return res;
+}
+
+function convertText(text, language){
+  if(grade===2) return language==='en'?convertEnG2(text):convertKoG2(text);
+  // ── Grade 1 ──────────────────────────────────────────────────
+  const res=[]; let prevNum=false;
+  for(const ch of text){
+    if(language==='en'){
+      if(ch===' '){res.push({orig:' ',label:'␣',cells:[{v:0,d:[]}],type:'space'});prevNum=false;continue;}
+      if(/[0-9]/.test(ch)){
+        const cells=[];
+        if(!prevNum)cells.push({v:EN_NUM_PREFIX,d:bitmaskToDots(EN_NUM_PREFIX)});
+        const v=EN_BRAILLE[ch]||0;cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'digit'});prevNum=true;continue;
+      }
+      prevNum=false;
+      const lo=ch.toLowerCase(),v=EN_BRAILLE[lo];
+      if(v!==undefined){
+        const cells=[];
+        if(ch!==lo)cells.push({v:32,d:[6]});
+        cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'letter'});
+      }else res.push({orig:ch,label:ch,cells:[],type:'unknown'});
+    }else{
+      // ── 한국어 모드: 한글 + 영문 + 숫자 혼용 처리 ──
+      if(ch===' '){res.push({orig:' ',label:'␣',cells:[{v:0,d:[]}],type:'space'});prevNum=false;continue;}
+      if(isHangul(ch)){
+        // 한글 → 초·중·종성 분해
+        prevNum=false;
+        const{cho,jung,jong}=decompose(ch);const cells=[];
+        for(const v of CHOSEONG[cho])cells.push({v,d:bitmaskToDots(v)});
+        for(const v of JUNGSEONG[jung])cells.push({v,d:bitmaskToDots(v)});
+        for(const v of JONGSEONG[jong])cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'hangul'});
+      }else if(/[0-9]/.test(ch)){
+        // 숫자 → 숫자 접두사(#) 포함 (영문 모드와 동일 규칙)
+        const cells=[];
+        if(!prevNum)cells.push({v:EN_NUM_PREFIX,d:bitmaskToDots(EN_NUM_PREFIX)});
+        const v=EN_BRAILLE[ch]||0;
+        cells.push({v,d:bitmaskToDots(v)});
+        res.push({orig:ch,label:ch,cells,type:'digit'});
+        prevNum=true;
+      }else{
+        // 영문·특수문자 → 대문자 인디케이터 포함
+        prevNum=false;
+        const lo=ch.toLowerCase(),v=EN_BRAILLE[lo];
+        if(v!==undefined){
+          const cells=[];
+          if(ch!==lo)cells.push({v:32,d:[6]}); // 대문자 인디케이터 (dot6)
+          cells.push({v,d:bitmaskToDots(v)});
+          res.push({orig:ch,label:ch,cells,type:'latin'});
+        }else res.push({orig:ch,label:ch,cells:[],type:'unknown'});
+      }
+    }
+  }
+  return res;
+}
+
+function textToCells(text, language){
+  const res=convertText(text, language);
+  const cells=[];
+  for(const item of res) for(const c of item.cells) cells.push(c.v);
+  return cells;
+}
+
+// ============================================================
+// PDF 기능
+// ============================================================
+
+// 드래그 앤 드롭
+function onDragOver(e){e.preventDefault();document.getElementById('dropZone').classList.add('drag-over');}
+function onDragLeave(e){document.getElementById('dropZone').classList.remove('drag-over');}
+function routeFileLoad(file){
+  if(!file) return;
+  const name=file.name.toLowerCase();
+  if(name.endsWith('.pdf')) loadPdf(file);
+  else if(name.endsWith('.docx')||name.endsWith('.doc')) loadDocx(file);
+  else if(name.endsWith('.txt')) loadTxt(file);
+  else if(name.endsWith('.brf')||name.endsWith('.brl')) loadBrf(file);
+  else addLog('err',`지원하지 않는 형식입니다 — PDF, DOCX, TXT, BRF, BRL만 가능`);
+}
+function onDrop(e){
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag-over');
+  routeFileLoad(e.dataTransfer.files[0]);
+}
+function onFileSelect(e){
+  routeFileLoad(e.target.files[0]);
+  e.target.value=''; // 같은 파일 재선택 허용
+}
+
+// ============================================================
+// TXT / DOCX 로더
+// ============================================================
+
+/**
+ * 전체 텍스트를 브레일 셀 기준으로 페이지 분할
+ * 300셀 그래픽 영역에 맞게, 단락 경계를 최대한 보존
+ */
+function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
+  // 빈 줄 기준으로 단락 분리
+  const paras=fullText.split(/\n{2,}/).map(p=>p.replace(/\r/g,'').trim()).filter(p=>p);
+  const pages=[];
+  let buf='', bufCells=0;
+
+  for(const para of paras){
+    const pc=textToCells(para, lang).length;
+    if(pc===0) continue;
+
+    if(bufCells+pc<=cellsPerPage){
+      // 현재 페이지에 붙이기
+      buf+=(buf?'\n\n':'')+para;
+      bufCells+=pc;
+    } else if(pc>cellsPerPage){
+      // 단락이 너무 길면: 현재 페이지 마감 후 단어 단위로 분할
+      if(buf){pages.push(buf); buf=''; bufCells=0;}
+      const words=para.split(/\s+/);
+      let wBuf='', wCells=0;
+      for(const w of words){
+        const wc=textToCells(w+' ', lang).length;
+        if(wCells+wc<=cellsPerPage){
+          wBuf+=(wBuf?' ':'')+w; wCells+=wc;
+        }else{
+          if(wBuf) pages.push(wBuf);
+          wBuf=w; wCells=wc;
+        }
+      }
+      if(wBuf){buf=wBuf; bufCells=wCells;}
+    } else {
+      // 이 단락을 새 페이지로
+      if(buf) pages.push(buf);
+      buf=para; bufCells=pc;
+    }
+  }
+  if(buf) pages.push(buf);
+  return pages.length?pages:['(내용 없음)'];
+}
+
+/** TXT/DOCX 공통 가상 문서 설정 */
+function setupVirtualDoc(filename, pages, type){
+  docType=type;
+  pdfDoc=null;            // PDF.js 객체 없음
+  pdfTotalPages=pages.length;
+  pdfCurrentPage=1;
+  pdfPageTexts={};
+  pdfPageDots={}; pdfPageHasImg={};
+  pages.forEach((p,i)=>{ pdfPageTexts[i+1]=p; }); // 텍스트 미리 캐시
+  pdfMode=true;
+
+  const typeIcon={pdf:'📄',docx:'📝',txt:'📃'}[type]||'📄';
+  document.getElementById('pdfFilename').textContent=`${typeIcon} ${filename}`;
+  document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지 (가상 페이지 분할)`;
+  hidePdfLoading();
+  document.getElementById('dropZoneWrap').style.display='none';
+  document.getElementById('pdfLoadedWrap').style.display='block';
+  document.getElementById('dualBadge').style.display='flex';
+
+  addLog('ok',`✓ ${type.toUpperCase()} 로드: ${filename} → ${pdfTotalPages}p`);
+  displayPdfPage(1);
+}
+
+/** TXT 로더 */
+async function loadTxt(file){
+  showPdfLoading(`${file.name} 불러오는 중...`);
+  try{
+    const text=await file.text();
+    if(!text.trim()){hidePdfLoading();addLog('err','TXT 파일이 비어 있습니다');return;}
+    const pages=splitTextToPages(text, pdfLang);
+    setupVirtualDoc(file.name, pages, 'txt');
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`TXT 오류: ${e.message}`);
+  }
+}
+
+/** DOCX 로더 (mammoth.js 사용) */
+async function loadDocx(file){
+  if(typeof mammoth==='undefined'){addLog('err','mammoth.js 로드 실패 — 인터넷 연결을 확인하세요');return;}
+  showPdfLoading(`${file.name} 불러오는 중...`);
+  try{
+    const arrayBuffer=await file.arrayBuffer();
+    const result=await mammoth.extractRawText({arrayBuffer});
+    const text=result.value;
+    if(!text.trim()){hidePdfLoading();addLog('err','DOCX에서 텍스트를 추출할 수 없습니다');return;}
+    if(result.messages.length>0) addLog('info',`⚠ 변환 경고: ${result.messages[0].message}`);
+    const pages=splitTextToPages(text, pdfLang);
+    setupVirtualDoc(file.name, pages, 'docx');
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`DOCX 오류: ${e.message}`);
+  }
+}
+
+async function loadPdf(file){
+  if(typeof pdfjsLib==='undefined'){addLog('err','PDF.js 로드 실패 — 인터넷 연결을 확인하세요');return;}
+
+  showPdfLoading(`${file.name} 불러오는 중...`);
+
+  try{
+    const arrayBuffer=await file.arrayBuffer();
+    pdfDoc=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+    pdfTotalPages=pdfDoc.numPages;
+    pdfCurrentPage=1;
+    pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
+    pdfPageSubTexts={}; pdfCurrentSubPage=0;
+    pdfMode=true; docType='pdf';
+
+    document.getElementById('pdfFilename').textContent=file.name;
+    document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지`;
+    hidePdfLoading();
+    document.getElementById('dropZoneWrap').style.display='none';
+    document.getElementById('pdfLoadedWrap').style.display='block';
+    document.getElementById('dualBadge').style.display='flex';
+
+    addLog('ok',`✓ PDF 로드 완료: ${file.name} (${pdfTotalPages}p)`);
+    await displayPdfPage(1);
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`PDF 오류: ${e.message}`);
+  }
+}
+
+// ============================================================
+// BRF / BRL 파서 & 로더
+// ============================================================
+
+/**
+ * BRF ASCII 내용 → 6점 셀 배열 페이지로 변환
+ * 규칙: 문자코드 - 32 = 점자 6점 비트마스크 (0x20=' '=0 ~ 0x5F='_'=63)
+ * LF=줄바꿈  FF=페이지나누기  CR=무시
+ */
+function parseBrfToCellPages(content){
+  const COLS=CELLS_PER_LINE;      // 30
+  const ROWS=LINES_PER_SCR;       // 10
+  const PAGE=CELLS_GRAPHIC;       // 300
+
+  const pages=[];
+  let curLine=[], curPage=[];
+
+  function commitLine(){
+    while(curLine.length<COLS) curLine.push(0);
+    curPage.push(curLine.slice(0,COLS));
+    curLine=[];
+  }
+  function commitPage(){
+    if(curLine.length>0) commitLine();
+    while(curPage.length<ROWS) curPage.push(new Array(COLS).fill(0));
+    const cells=new Uint8Array(PAGE);
+    for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) cells[r*COLS+c]=curPage[r][c];
+    pages.push(cells);
+    curPage=[];
+    curLine=[];
+  }
+
+  for(let i=0;i<content.length;i++){
+    const code=content.charCodeAt(i);
+    if(code===13) continue;                             // CR: 무시
+    if(code===12){                                      // FF: 페이지 나누기
+      if(curLine.length>0||curPage.length>0) commitPage();
+      continue;
+    }
+    if(code===10){                                      // LF: 줄 바꿈
+      commitLine();
+      if(curPage.length===ROWS) commitPage();
+      continue;
+    }
+    if(code>=32 && code<=127){
+      curLine.push((code-32)&0x3F);                    // 6점 비트마스크 (64이상=확장점 마스킹)
+      if(curLine.length>=COLS){ commitLine(); if(curPage.length===ROWS) commitPage(); }
+    }
+  }
+  if(curLine.length>0||curPage.length>0) commitPage();
+  return pages.length>0?pages:[new Uint8Array(PAGE)];
+}
+
+/** BRF 셀 배열 → 유니코드 점자 텍스트 (텍스트 미리보기용) */
+function brfCellsToUnicodePreview(cells){
+  let out='';
+  for(let i=0;i<cells.length;i++){
+    if(i>0 && i%CELLS_PER_LINE===0) out+='\n';
+    out+=String.fromCodePoint(0x2800+cells[i]);
+  }
+  return out.trim();
+}
+
+/** BRF / BRL 로더 */
+async function loadBrf(file){
+  showPdfLoading(`${file.name} 불러오는 중...`);
+  try{
+    const text=await file.text();
+    if(!text.trim()){hidePdfLoading();addLog('err','BRF/BRL 파일이 비어 있습니다');return;}
+    const cellPages=parseBrfToCellPages(text);
+    const type=file.name.toLowerCase().endsWith('.brl')?'brl':'brf';
+
+    // 전역 상태 초기화
+    cancelSend();
+    docType=type;
+    pdfDoc=null;
+    pdfTotalPages=cellPages.length;
+    pdfCurrentPage=1;
+    pdfPageTexts={};
+    pdfPageDots={};
+    pdfPageHasImg={};
+    pdfMode=true;
+
+    // 페이지 캐시 구성
+    cellPages.forEach((cells,i)=>{
+      const pn=i+1;
+      pdfPageDots[pn]=cells;
+      pdfPageHasImg[pn]=true;
+      pdfPageTexts[pn]=brfCellsToUnicodePreview(cells); // 유니코드 점자 미리보기
+    });
+
+    document.getElementById('pdfFilename').textContent=`⠿ ${file.name}`;
+    document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀`;
+    hidePdfLoading();
+    document.getElementById('dropZoneWrap').style.display='none';
+    document.getElementById('pdfLoadedWrap').style.display='block';
+    document.getElementById('dualBadge').style.display='flex';
+
+    addLog('ok',`✓ ${type.toUpperCase()} 로드: ${file.name} → ${pdfTotalPages}p`);
+    displayPdfPage(1);
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`BRF/BRL 로드 실패: ${e.message}`);
+  }
+}
+
+function closePdf(){
+  cancelSend();
+  const prevType=docType;
+  pdfDoc=null; pdfMode=false; docType='none';
+  pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
+  pdfPageSubTexts={}; pdfCurrentSubPage=0;
+  document.getElementById('dropZoneWrap').style.display='block';
+  document.getElementById('pdfLoadedWrap').style.display='none';
+  document.getElementById('dualBadge').style.display='none';
+  document.getElementById('pdfTextPreview').textContent='';
+  document.getElementById('viewModeBadgeWrap').style.display='none';
+  setPdfDotpadStatus('idle','닷패드 대기','패닝키 ◀▶ 로 페이지 이동');
+  setPdfPageBig(null,null);
+  addLog('info',`${prevType.toUpperCase()} 문서가 닫혔습니다`);
+}
+
+// ============================================================
+// PDF 이미지 감지 & 캔버스→도트 변환
+// ============================================================
+
+/** PDF 페이지에 이미지/그래픽 오퍼레이터가 있는지 확인 */
+async function pageHasImages(pdfPage){
+  if(pdfPageHasImg[pdfPage.pageNumber]!==undefined)
+    return pdfPageHasImg[pdfPage.pageNumber];
+  const ops=await pdfPage.getOperatorList();
+  // paintImageXObject=85, paintInlineImageXObject=86, paintImageMaskXObject=84
+  const IMAGE_OPS=new Set([84,85,86]);
+  const result=ops.fnArray.some(fn=>IMAGE_OPS.has(fn));
+  pdfPageHasImg[pdfPage.pageNumber]=result;
+  return result;
+}
+
+/**
+ * PDF 페이지를 DotPad 그래픽 영역(30셀×10줄 = 60dot×30dot)으로 변환
+ * 반환: 길이 300 의 bitmask 배열
+ */
+async function renderPageToDots(pdfPage){
+  if(pdfPageDots[pdfPage.pageNumber])
+    return pdfPageDots[pdfPage.pageNumber];
+
+  const DOT_W=60, DOT_H=30;           // 전체 도트 해상도
+  const SCALE=3;                       // 렌더 배율 (선명도)
+  const canvW=DOT_W*SCALE, canvH=DOT_H*SCALE;
+
+  // 페이지를 캔버스에 렌더 (페이지 비율 유지, fit-to-width)
+  const origVp=pdfPage.getViewport({scale:1});
+  const pageScale=(canvW/origVp.width);
+  const vp=pdfPage.getViewport({scale:pageScale});
+
+  const canvas=document.createElement('canvas');
+  canvas.width=canvW;
+  canvas.height=Math.min(Math.ceil(vp.height), canvH); // 높이 초과 시 상단만
+
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  await pdfPage.render({canvasContext:ctx,viewport:vp}).promise;
+
+  const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const cells=canvasToDotCells(imgData,canvas.width,canvas.height,DOT_W,DOT_H);
+  pdfPageDots[pdfPage.pageNumber]=cells;
+  return cells;
+}
+
+/**
+ * ImageData → DotPad bitmask 배열 (300개)
+ * DOT_W×DOT_H 도트 공간에서 각 도트 위치의 픽셀 밝기로 on/off 판단
+ */
+function canvasToDotCells(imgData,cW,cH,DOT_W,DOT_H){
+  const {data,width,height}=imgData;
+  const cells=[];
+  const CELLS_X=DOT_W/2;  // 30 cells per row
+  const CELLS_Y=DOT_H/3;  // 10 lines
+  // dot 위치 (cell 내 상대): [dotIdx] → {colOff, rowOff}  (col 0-1, row 0-2)
+  const DOT_POS=[{c:0,r:0},{c:0,r:1},{c:0,r:2},{c:1,r:0},{c:1,r:1},{c:1,r:2}];
+  // bitmask bit order: dot1=bit0 .. dot6=bit5
+
+  for(let ly=0;ly<CELLS_Y;ly++){
+    for(let lx=0;lx<CELLS_X;lx++){
+      let mask=0;
+      for(let di=0;di<6;di++){
+        const {c,r}=DOT_POS[di];
+        const dotX=lx*2+c;   // 0..59
+        const dotY=ly*3+r;   // 0..29
+        // 캔버스 픽셀 좌표 (SCALE 고려)
+        const px=Math.floor(dotX*cW/DOT_W);
+        const py=Math.floor(dotY*cH/DOT_H);
+        if(px<width&&py<height){
+          const idx=(py*width+px)*4;
+          const brightness=(data[idx]*0.299+data[idx+1]*0.587+data[idx+2]*0.114);
+          if(brightness<175) mask|=(1<<di); // 어두우면 도트 ON
+        }
+      }
+      cells.push(mask);
+    }
+  }
+  return cells;
+}
+
+async function getPdfPageText(pageNum){
+  if(pdfPageTexts[pageNum]) return pdfPageTexts[pageNum];
+  const page=await pdfDoc.getPage(pageNum);
+  const content=await page.getTextContent();
+  // 텍스트 아이템을 이어붙이되 줄바꿈 보존
+  let text='';
+  let lastY=null;
+  for(const item of content.items){
+    if('str' in item){
+      // y 좌표 변화가 크면 줄바꿈
+      const y=item.transform?item.transform[5]:null;
+      if(lastY!==null&&y!==null&&Math.abs(y-lastY)>5&&text.length>0){
+        if(!text.endsWith('\n')) text+='\n';
+      }
+      text+=item.str;
+      lastY=y;
+    }
+  }
+  // 정리: 과도한 공백·줄바꿈 제거
+  text=text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  pdfPageTexts[pageNum]=text;
+  return text;
+}
+
+/**
+ * PDF 페이지 텍스트가 300셀을 초과하는 경우 서브페이지로 분할 (캐시)
+ * 반환: string[] — 각 서브페이지의 텍스트 (≤300셀)
+ */
+function getOrBuildSubPages(pageNum, text){
+  if(pdfPageSubTexts[pageNum]) return pdfPageSubTexts[pageNum];
+  const cellCount=textToCells(text, pdfLang).length;
+  let sub;
+  if(cellCount<=CELLS_GRAPHIC){
+    sub=[text];
+  } else {
+    // splitTextToPages로 ≤300셀 단위 분할
+    sub=splitTextToPages(text, pdfLang, CELLS_GRAPHIC);
+  }
+  pdfPageSubTexts[pageNum]=sub;
+  return sub;
+}
+
+async function displayPdfPage(pageNum, subPage){
+  if(!pdfMode) return;
+  pdfCurrentPage=pageNum;
+  // subPage 파라미터 없으면 현재 서브페이지 유지 (명시적으로 0 넘기면 리셋)
+  if(subPage!==undefined) pdfCurrentSubPage=subPage;
+
+  document.getElementById('pdfTextPreview').textContent='페이지 분석 중...';
+  document.getElementById('pdfTextPreview').classList.add('empty');
+  setPdfDotpadStatus('sending','페이지 로딩 중...','잠시 대기');
+
+  let text, hasImg=false, imgDots=null;
+
+  if(pdfDoc){
+    // ── PDF: 텍스트 추출 + 이미지 감지 병렬 수행 ──
+    const pdfPage=await pdfDoc.getPage(pageNum);
+    let fullText;
+    [fullText, hasImg]=await Promise.all([
+      getPdfPageText(pageNum),
+      pageHasImages(pdfPage)
+    ]);
+    if(hasImg) imgDots=await renderPageToDots(pdfPage);
+
+    // 텍스트 모드일 때 서브페이지 분할
+    if(!hasImg && fullText){
+      const subs=getOrBuildSubPages(pageNum, fullText);
+      const subIdx=Math.min(pdfCurrentSubPage, subs.length-1);
+      pdfCurrentSubPage=subIdx;
+      text=subs[subIdx];
+    } else {
+      text=fullText;
+      pdfCurrentSubPage=0;
+    }
+  } else if(docType==='brf'||docType==='brl'){
+    // ── BRF/BRL: 미리 파싱된 점자 셀 직접 사용 ──
+    imgDots=pdfPageDots[pageNum]||new Uint8Array(CELLS_GRAPHIC);
+    hasImg=true;
+    text=pdfPageTexts[pageNum]||''; // 유니코드 점자 미리보기 텍스트
+    pdfCurrentSubPage=0;
+  } else {
+    // ── TXT / DOCX: 캐시된 텍스트(이미 ≤300셀), 이미지 없음 ──
+    text=pdfPageTexts[pageNum]||'';
+    hasImg=false;
+    pdfCurrentSubPage=0;
+  }
+
+  // 뷰 모드: BRF는 항상 graphic, PDF에 이미지 있으면 graphic, 나머지 text
+  pdfViewMode= hasImg ? 'graphic' : 'text';
+
+  // ── 페이지 이동 버튼 & 인디케이터 업데이트 ──
+  const subCount=(pdfDoc&&!hasImg&&pdfPageSubTexts[pageNum])
+                  ? pdfPageSubTexts[pageNum].length : 1;
+  const hasPrevSub=pdfCurrentSubPage>0;
+  const hasNextSub=pdfCurrentSubPage<subCount-1;
+  document.getElementById('pdfPrevBtn').disabled=(pageNum<=1 && !hasPrevSub);
+  document.getElementById('pdfNextBtn').disabled=(pageNum>=pdfTotalPages && !hasNextSub);
+
+  // 페이지 번호 표시: 서브페이지 있을 때 "P-S/SC / T"
+  if(subCount>1){
+    document.getElementById('pdfPageInfo').textContent=
+      `${pageNum}-${pdfCurrentSubPage+1}/${subCount} / ${pdfTotalPages}`;
+  } else {
+    document.getElementById('pdfPageInfo').textContent=`${pageNum} / ${pdfTotalPages}`;
+  }
+  setPdfPageBig(pageNum, pdfTotalPages);
+
+  // 배지 업데이트
+  updateViewModeBadge(hasImg);
+
+  // 텍스트 미리보기 업데이트
+  if(docType==='brf'||docType==='brl'){
+    // BRF: 유니코드 점자 미리보기 + 활성 셀 수 표시
+    document.getElementById('pdfTextPreview').textContent=text||'(빈 페이지)';
+    document.getElementById('pdfTextPreview').classList.toggle('empty',!text);
+    const activeCnt=Array.from(pdfPageDots[pageNum]||[]).filter(v=>v!==0).length;
+    document.getElementById('pdfPageSub').textContent=`${activeCnt}/${CELLS_GRAPHIC}셀 활성`;
+  } else if(text){
+    document.getElementById('pdfTextPreview').textContent=text;
+    document.getElementById('pdfTextPreview').classList.remove('empty');
+    const cellCnt=textToCells(text,pdfLang).length;
+    const subInfo=subCount>1?` (${pdfCurrentSubPage+1}/${subCount})`:'' ;
+    document.getElementById('pdfPageSub').textContent=
+      `${text.length}글자 · ${cellCnt}셀${subInfo}`;
+  } else if(hasImg){
+    document.getElementById('pdfTextPreview').textContent='(이미지만 있는 페이지)';
+    document.getElementById('pdfTextPreview').classList.add('empty');
+    document.getElementById('pdfPageSub').textContent='이미지 페이지';
+  } else {
+    document.getElementById('pdfTextPreview').textContent='(이 페이지에 텍스트가 없습니다)';
+    document.getElementById('pdfPageSub').textContent='0글자';
+    return;
+  }
+
+  // 점자 셀 시각화 (BRF는 이미 점자이므로 텍스트 변환 불필요)
+  if(text && docType!=='brf' && docType!=='brl'){ const result=convertText(text, pdfLang); renderAll(result); }
+
+  // 닷패드 전송 (현재 뷰 모드에 맞게) — BLE 미연결 시에도 시각화는 업데이트
+  await sendPdfDual(text||'', pageNum, imgDots);
+
+  // 이웃 페이지 백그라운드 프리패치 (다음 패닝키 응답 속도 개선)
+  prefetchNeighborPages(pageNum);
+}
+
+async function prevPdfPage(){if(pdfCurrentPage>1) await displayPdfPage(pdfCurrentPage-1, 0);}
+async function nextPdfPage(){if(pdfCurrentPage<pdfTotalPages) await displayPdfPage(pdfCurrentPage+1, 0);}
+
+// ── 이웃 페이지 백그라운드 프리패치 (캐시 없을 때만 실행) ────────────
+async function prefetchNeighborPages(currentPage){
+  if(!pdfMode) return;
+  const targets=[];
+  if(currentPage+1<=pdfTotalPages) targets.push(currentPage+1);
+  if(currentPage-1>=1)             targets.push(currentPage-1);
+  for(const p of targets){
+    if(pdfDoc){
+      // PDF: 텍스트 + 이미지 프리패치
+      if(!pdfPageTexts[p]) getPdfPageText(p).catch(()=>{});
+      if(pdfPageHasImg[p]===undefined){
+        pdfDoc.getPage(p).then(async pg=>{
+          const hasImg=await pageHasImages(pg);
+          if(hasImg && !pdfPageDots[p]) await renderPageToDots(pg);
+        }).catch(()=>{});
+      }
+    }
+    // TXT/DOCX: 텍스트는 이미 setupVirtualDoc에서 캐시됨 — 추가 작업 불필요
+  }
+}
+function setPdfLang(l){
+  pdfLang=l;
+  document.getElementById('pdfBtnKo').classList.toggle('active',l==='ko');
+  document.getElementById('pdfBtnEn').classList.toggle('active',l==='en');
+  if(!pdfMode) return;
+  if(docType==='txt'||docType==='docx'){
+    // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
+    addLog('info',`언어 변경 → 페이지 재분할 중...`);
+    // 원문 텍스트 복원 후 재분할
+    const fullText=Object.values(pdfPageTexts).join('\n\n');
+    const pages=splitTextToPages(fullText, l);
+    pages.forEach((p,i)=>{pdfPageTexts[i+1]=p;});
+    pdfTotalPages=pages.length;
+    pdfPageSubTexts={}; pdfCurrentSubPage=0;
+    document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지 (가상 페이지 분할)`;
+    displayPdfPage(1, 0);
+  } else {
+    displayPdfPage(pdfCurrentPage);
+  }
+}
+
+// ============================================================
+// 뷰 모드 배지 업데이트
+// ============================================================
+function updateViewModeBadge(hasImg){
+  const wrap=document.getElementById('viewModeBadgeWrap');
+  if(!wrap) return;
+  if(!hasImg){ wrap.style.display='none'; return; }
+  wrap.style.display='block';
+  const badge=document.getElementById('viewModeBadge');
+  const icon=document.getElementById('viewModeIcon');
+  const label=document.getElementById('viewModeLabel');
+  const hint=document.getElementById('viewModeHint');
+  if(docType==='brf'||docType==='brl'){
+    // BRF/BRL: 전용 배지 (뷰 전환 없음)
+    badge.className='view-mode-badge graphic';
+    icon.textContent='⠿';
+    label.textContent=docType.toUpperCase()+' 점자';
+    hint.textContent='패닝키 ◀▶ 로 페이지 이동';
+  } else if(pdfViewMode==='graphic'){
+    badge.className='view-mode-badge graphic';
+    icon.textContent='🖼';
+    label.textContent='이미지 보기';
+    hint.textContent='패닝키 ▶ → 텍스트 전환';
+  } else {
+    badge.className='view-mode-badge text';
+    icon.textContent='📝';
+    label.textContent='텍스트 보기';
+    hint.textContent='패닝키 ◀ → 이미지 전환';
+  }
+}
+
+// 같은 페이지 내에서 graphic ↔ text 뷰 전환 (페이지 이동 없음)
+async function switchPdfView(targetMode){
+  if(!pdfDoc) return;
+  pdfViewMode=targetMode;
+  const hasImg=!!pdfPageHasImg[pdfCurrentPage];
+  updateViewModeBadge(hasImg);
+
+  const pageLabel=`P.${String(pdfCurrentPage).padStart(2,'0')}`;
+  textLineCells=textToCells(pageLabel,'en');
+  const sub=document.getElementById('textAreaSub');
+
+  if(targetMode==='graphic'){
+    // 이미지 도트로 전환
+    const pdfPage=await pdfDoc.getPage(pdfCurrentPage);
+    const imgDots=await renderPageToDots(pdfPage);
+    const tHintsImg=buildCellHints(pageLabel,'en');
+    renderBothPreviews(imgDots, textLineCells, [], tHintsImg);
+    if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
+    addLog('info','🖼 이미지 뷰로 전환');
+    if(bleChar&&!isSending){
+      isSending=true; setSendBtn(true);
+      try{
+        await sendTextMode(textLineCells); await sleep(50);
+        await sendGraphicMode(imgDots);
+        addLog('ok','✓ 이미지 전송 완료');
+      }catch(e){addLog('err',`전송 오류: ${e.message}`);}
+      setSendBtn(false); isSending=false;
+    }
+  } else {
+    // 텍스트 도트로 전환
+    const text=await getPdfPageText(pdfCurrentPage)||'';
+    const bodyCells=textToCells(text, pdfLang);
+    const gHintsTxt=buildCellHints(text, pdfLang);
+    const tHintsTxt=buildCellHints(pageLabel,'en');
+    renderBothPreviews(bodyCells.slice(0,CELLS_GRAPHIC), textLineCells, gHintsTxt, tHintsTxt);
+    if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
+    addLog('info','📝 텍스트 뷰로 전환');
+    if(bleChar&&!isSending){
+      isSending=true; setSendBtn(true);
+      try{
+        await sendTextMode(textLineCells); await sleep(50);
+        await sendGraphicMode(bodyCells.slice(0,CELLS_GRAPHIC));
+        addLog('ok','✓ 텍스트 전송 완료');
+      }catch(e){addLog('err',`전송 오류: ${e.message}`);}
+      setSendBtn(false); isSending=false;
+    }
+  }
+}
+
+// ── PDF 닷패드 상태 바 업데이트 ───────────────────────────────
+function setPdfDotpadStatus(state, label, hint){
+  // state: 'idle' | 'sending' | 'ready'
+  const bar=document.getElementById('pdfDotpadStatus');
+  if(!bar) return;
+  bar.className='pdf-dotpad-status '+state;
+  document.getElementById('dsLabel').textContent=label;
+  if(hint!==undefined) document.getElementById('dsHint').textContent=hint;
+}
+function setPdfPageBig(pageNum, total){
+  const el=document.getElementById('dsPageBig');
+  if(el) el.textContent= pageNum ? `${pageNum} / ${total}` : '—';
+}
+
+function showPdfLoading(msg){
+  document.getElementById('pdfLoading').style.display='flex';
+  document.getElementById('pdfLoadingText').textContent=msg;
+  document.getElementById('dropZoneWrap').style.display='none';
+}
+function hidePdfLoading(){document.getElementById('pdfLoading').style.display='none';}
+
+// ============================================================
+// 닷패드 PDF 듀얼 전송
+// 텍스트(20셀) = 페이지 번호 (항상)
+// 그래픽(300셀) = pdfViewMode==='graphic' 이면 이미지 도트,
+//                pdfViewMode==='text'    이면 본문 점자
+// ============================================================
+async function sendPdfDual(bodyText, pageNum, imgDots=null){
+  const sv=++sendVersion;  // 이 전송의 고유 버전 — 패닝키 누르면 다음 sendVersion으로 덮어씌워 중단
+
+  // 페이지 번호 → 텍스트 20셀 (항상); 서브페이지 있으면 표시
+  const subCount=(pdfPageSubTexts[pageNum]&&pdfPageSubTexts[pageNum].length>1)
+                  ? pdfPageSubTexts[pageNum].length : 0;
+  const pageLabel= subCount>1
+    ? `P.${String(pageNum).padStart(2,'0')}-${pdfCurrentSubPage+1}`
+    : `P.${String(pageNum).padStart(2,'0')}`;
+  textLineCells=textToCells(pageLabel,'en');
+
+  // 그래픽 영역 데이터 결정
+  let graphicCells;
+  if(pdfViewMode==='graphic' && imgDots){
+    graphicCells=imgDots;
+  } else {
+    graphicCells=textToCells(bodyText||'', pdfLang);
+  }
+
+  // 힌트 계산
+  const gHints=(pdfViewMode==='graphic'&&imgDots)?[]:buildCellHints(bodyText||'',pdfLang);
+  const tHints=buildCellHints(pageLabel,'en');
+
+  // 미리보기 즉시 업데이트 (BLE 전송과 무관하게 항상)
+  renderBothPreviews(graphicCells.slice(0, CELLS_GRAPHIC), textLineCells, gHints, tHints);
+  const sub=document.getElementById('textAreaSub');
+  if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
+
+  if(!bleChar){
+    setPdfDotpadStatus('idle','닷패드 미연결','연결 후 자동 전송');
+    return;
+  }
+
+  // 이전 전송이 진행 중이면 버전 교체로 자동 취소 → 여기서 바로 시작
+  isSending=true; setSendBtn(true);
+  setPdfDotpadStatus('sending',`${pageNum}p 전송 중...`,'패닝키로 즉시 취소 가능');
+
+  try{
+    if(sendVersion!==sv){isSending=false;setSendBtn(false);return;}
+    addLog('send',`${pageNum}p → ${pdfViewMode==='graphic'?'🖼 이미지':'📝 텍스트'}`);
+
+    // ① 텍스트 영역 (20셀) → 페이지 번호
+    await sendTextMode(textLineCells);
+    await sleep(30);
+
+    // ② 그래픽 영역 (300셀) → 이미지 또는 본문 (프레임 사이 버전 체크로 중단 가능)
+    if(pdfViewMode==='graphic' && imgDots){
+      await sendGraphicMode(imgDots, sv);
+    } else {
+      await sendGraphicMode(graphicCells.slice(0, CELLS_GRAPHIC), sv);
+    }
+
+    if(sendVersion===sv){
+      addLog('ok',`✓ ${pageNum}p 완료`);
+      setPdfDotpadStatus('ready',`${pageNum}p 표시 중`,'패닝키 ◀▶ 로 페이지 이동');
+    }
+  }catch(e){
+    if(sendVersion===sv){
+      addLog('err',`전송 오류: ${e.message}`);
+      setPdfDotpadStatus('idle','전송 오류','다시 시도하세요');
+    }
+  }
+  if(sendVersion===sv){setSendBtn(false); isSending=false;}
+}
+
+// ============================================================
+// BLE 프로토콜
+// ============================================================
+function buildFrame(lineId,mode,startCell,dataBytes){
+  const len=dataBytes.length+6;
+  const cmd=[lineId,0x02,0x00,mode,startCell,...dataBytes];
+  let chk=0xA5;for(const b of cmd)chk^=b;
+  return new Uint8Array([0xAA,0x55,0x00,len,...cmd,chk]);
+}
+function padCells(cells,count){const p=[...cells];while(p.length<count)p.push(0x00);return p.slice(0,count);}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+async function writeBle(frame){
+  if(!bleChar)throw new Error('BLE not connected');
+  if(bleChar.properties&&bleChar.properties.writeWithoutResponse)
+    await bleChar.writeValueWithoutResponse(frame);
+  else await bleChar.writeValue(frame);
+}
+async function sendTextMode(cells){
+  const data=padCells(cells,CELLS_TEXT);
+  await writeBle(buildFrame(0x00,MODE_TEXT,0x00,data));
+}
+async function sendGraphicMode(cells, sv){
+  const padded=padCells(cells,CELLS_GRAPHIC);
+  for(let ln=0;ln<LINES_PER_SCR;ln++){
+    // 패닝키 등으로 새 전송이 요청되면 즉시 중단
+    if(sv!==undefined && sendVersion!==sv) return;
+    // 6점 내부값 → 8점 DotPad 인코딩으로 변환 후 전송
+    const lineData=padded.slice(ln*CELLS_PER_LINE,(ln+1)*CELLS_PER_LINE)
+                         .map(cell6to8);
+    await writeBle(buildFrame(ln+1,MODE_GRAPHIC,0x00,lineData));
+    if(ln<LINES_PER_SCR-1)await sleep(25);
+  }
+}
+async function sendCurrentPage(){
+  if(!bleChar||isSending)return;
+  isSending=true;setSendBtn(true);
+  const cells=getPageCells();
+  try{
+    if(dispMode==='text'){await sendTextMode(cells);addLog('ok','✓ 텍스트 전송 완료 — 20셀');}
+    else{addLog('send','그래픽 멀티라인 전송 중...');await sendGraphicMode(cells);addLog('ok','✓ 그래픽 전송 완료 — 300셀');}
+  }catch(e){addLog('err',`전송 오류: ${e.message}`);}
+  setSendBtn(false);isSending=false;
+}
+function setSendBtn(sending){
+  const b=document.getElementById('sendBtn');
+  if(sending){b.classList.add('sending');b.textContent='전송 중...';}
+  else{b.classList.remove('sending');b.innerHTML='▶&nbsp;지금 전송';}
+}
+
+// ============================================================
+// BLE 연결
+// ============================================================
+async function connectDotPad(){
+  if(!navigator.bluetooth){document.getElementById('bleWarn').style.display='block';addLog('err','Web Bluetooth 미지원 — Chrome 필요');return;}
+  setStatus('connecting','연결 중...');addLog('info','BLE 디바이스 검색 중...');
+  try{
+    const dev=await navigator.bluetooth.requestDevice({filters:[{namePrefix:'DotPad'}],optionalServices:[BLE_SVC]});
+    addLog('info',`발견: ${dev.name}`);
+    dev.addEventListener('gattserverdisconnected',onDisconnected);
+    const srv=await dev.gatt.connect();
+    const svc=await srv.getPrimaryService(BLE_SVC);
+    bleChar=await svc.getCharacteristic(BLE_CHAR);
+    if(bleChar.properties.notify){await bleChar.startNotifications();bleChar.addEventListener('characteristicvaluechanged',onNotify);}
+    bleDevice=dev;setStatus('connected','연결됨');showBadge(dev.name);addLog('ok',`✓ ${dev.name} 연결 완료`);
+    document.getElementById('connectBtn').disabled=true;
+    document.getElementById('disconnectBtn').disabled=false;
+    document.getElementById('sendBtn').disabled=false;
+    enableAutoSend(true);
+    // 연결 즉시 현재 콘텐츠 전송
+    if(pdfMode&&pdfDoc){
+      const _text=await getPdfPageText(pdfCurrentPage);
+      const _page=await pdfDoc.getPage(pdfCurrentPage);
+      const _hasImg=await pageHasImages(_page);
+      const _dots=_hasImg?await renderPageToDots(_page):null;
+      sendPdfDual(_text,pdfCurrentPage,_dots);
+    } else if(allCells.length>0) sendCurrentPage();
+  }catch(e){
+    if(e.name==='NotFoundError'){addLog('info','기기 선택 취소됨');setStatus('disconnected','연결되지 않음');}
+    else{addLog('err',`연결 오류: ${e.message}`);setStatus('error','연결 실패');}
+  }
+}
+async function disconnectDotPad(){if(bleDevice?.gatt.connected)bleDevice.gatt.disconnect();onDisconnected();}
+function onDisconnected(){
+  bleDevice=null;bleChar=null;
+  setStatus('disconnected','연결 끊김');hideBadge();enableAutoSend(false);addLog('info','연결이 끊겼습니다');
+  document.getElementById('connectBtn').disabled=false;
+  document.getElementById('disconnectBtn').disabled=true;
+  document.getElementById('sendBtn').disabled=true;
+}
+function cancelSend(){
+  // 진행 중인 전송을 즉시 취소 (sendGraphicMode가 다음 프레임에서 멈춤)
+  sendVersion++;
+  isSending=false;
+  setSendBtn(false);
+}
+function onNotify(e){
+  const d=new Uint8Array(e.target.value.buffer);
+  if(d[0]!==0xAA||d[1]!==0x55)return;
+  const cmd=d[4];
+  if(cmd===0x03){
+    const key=d[6]??0;
+    addLog('key',`⌨ 패닝키: ${(key===0x01||key===0x10)?'◀ 이전':'▶ 다음'}`);
+
+    // 패닝키 누르는 순간 진행 중인 전송 즉시 취소 → 새 페이지 전송 가능
+    cancelSend();
+
+    const isBrf=(docType==='brf'||docType==='brl');
+    if(key===0x01||key===0x10){
+      // ◀ P1 (왼쪽)
+      if(pdfMode){
+        if(!isBrf && pdfViewMode==='text' && pdfPageHasImg[pdfCurrentPage]){
+          // 이미지 페이지의 텍스트 뷰 → 이미지 뷰로 전환
+          switchPdfView('graphic');
+        } else if(!isBrf && pdfViewMode==='text' && pdfCurrentSubPage>0){
+          // 서브페이지 역방향 이동
+          displayPdfPage(pdfCurrentPage, pdfCurrentSubPage-1);
+        } else {
+          prevPdfPage();
+        }
+      } else prevPage(true);
+    } else if(key===0x02||key===0x20){
+      // ▶ P2 (오른쪽)
+      if(pdfMode){
+        if(!isBrf && pdfViewMode==='graphic' && pdfPageHasImg[pdfCurrentPage]){
+          // 이미지 뷰 → 텍스트 뷰로 전환 (PDF 이미지 페이지만)
+          switchPdfView('text');
+        } else if(!isBrf && pdfViewMode==='text'){
+          // 서브페이지 순방향 이동 가능하면 먼저 서브페이지
+          const subs=pdfPageSubTexts[pdfCurrentPage];
+          if(subs && pdfCurrentSubPage<subs.length-1){
+            displayPdfPage(pdfCurrentPage, pdfCurrentSubPage+1);
+          } else {
+            nextPdfPage();
+          }
+        } else {
+          nextPdfPage();
+        }
+      } else nextPage(true);
+    }
+  }else if(cmd===0x82||cmd===0x02){
+    // ACK — 조용히 처리 (로그 생략으로 깔끔하게)
+  }
+}
+
+// ============================================================
+// 자동 전송 (텍스트 입력 모드)
+// ============================================================
+function enableAutoSend(on){
+  autoEnabled=on;
+  const badge=document.getElementById('liveBadge');
+  const lt=document.getElementById('liveText');
+  if(on){badge.classList.add('active');lt.textContent='실시간 동기화';}
+  else{badge.classList.remove('active');lt.textContent='대기 중';clearTimeout(autoTimer);}
+}
+function scheduleAutoSend(){
+  if(!autoEnabled||!bleChar||pdfMode)return;
+  clearTimeout(autoTimer);
+  document.getElementById('liveText').textContent='입력 감지...';
+  autoTimer=setTimeout(async()=>{
+    document.getElementById('liveText').textContent='전송 중...';
+    await sendCurrentPage();
+    document.getElementById('liveText').textContent='실시간 동기화';
+  },400);
+}
+
+// ============================================================
+// 디스플레이 모드
+// ============================================================
+function setDisplayMode(mode){
+  dispMode=mode;
+  document.getElementById('modeText').classList.toggle('active',mode==='text');
+  document.getElementById('modeGraphic').classList.toggle('active',mode==='graphic');
+  document.getElementById('previewLabel').textContent=
+    mode==='text'?'닷패드 20셀 텍스트 영역 미리보기':'닷패드 300셀 그래픽 영역 미리보기 (10줄×30셀)';
+  dotpadPage=0;updatePageUI();
+  if(bleChar) sendCurrentPage();
+}
+
+// ============================================================
+// 페이지네이션 (텍스트/그래픽 모드)
+// ============================================================
+function cellsPerPage(){return dispMode==='text'?CELLS_TEXT:CELLS_GRAPHIC;}
+function totalPages(){return Math.max(1,Math.ceil(allCells.length/cellsPerPage()));}
+function getPageCells(){const s=dotpadPage*cellsPerPage();return allCells.slice(s,s+cellsPerPage());}
+async function prevPage(auto=false){if(dotpadPage>0){dotpadPage--;updatePageUI();if(auto||bleChar)sendCurrentPage();}}
+async function nextPage(auto=false){if(dotpadPage<totalPages()-1){dotpadPage++;updatePageUI();if(auto||bleChar)sendCurrentPage();}}
+async function manualSend(){
+  if(!bleChar){addLog('err','닷패드가 연결되지 않았습니다');return;}
+  if(pdfMode&&pdfDoc){
+    const _text=await getPdfPageText(pdfCurrentPage);
+    const _page=await pdfDoc.getPage(pdfCurrentPage);
+    const _hasImg=!!pdfPageHasImg[pdfCurrentPage];
+    const _dots=_hasImg?await renderPageToDots(_page):null;
+    await sendPdfDual(_text, pdfCurrentPage, _dots);
+  } else await sendCurrentPage();
+}
+
+function updatePageUI(){
+  const total=totalPages(),cpp=cellsPerPage();
+  const s=dotpadPage*cpp+1,e=Math.min((dotpadPage+1)*cpp,allCells.length);
+  document.getElementById('pageInfoText').textContent=`페이지 ${dotpadPage+1} / ${total}`;
+  document.getElementById('pageInfoCells').textContent=allCells.length>0?`(셀 ${s}–${e} / 전체 ${allCells.length})`:'';
+  document.getElementById('prevBtn').disabled=(dotpadPage===0);
+  document.getElementById('nextBtn').disabled=(dotpadPage===total-1);
+  document.getElementById('totalPagesStat').textContent=total;
+  renderPreview(getPageCells());
+}
+
+// ============================================================
+// 통합 미리보기 (그래픽 300셀 + 텍스트 20셀 동시 표시)
+// ============================================================
+function renderBothPreviews(graphicCells, textCells, gHints=[], tHints=[]){
+  renderGraphicPreview(document.getElementById('graphicPreviewPanel'), graphicCells, gHints);
+  renderTextStripPreview(document.getElementById('textPreviewPanel'), textCells, tHints);
+}
+
+// 하위 호환용 (updatePageUI 에서 호출)
+function renderPreview(cells){
+  const start=dotpadPage*cellsPerPage();
+  const gHints=graphicCellHints.slice(start, start+CELLS_GRAPHIC);
+  renderBothPreviews(cells, textLineCells, gHints, textCellHints);
+}
+
+function renderTextStripPreview(panel, cells, hints=[]){
+  const padded=padCells(cells, CELLS_TEXT);
+  let html='<div class="text-strip">';
+  for(let i=0;i<padded.length;i++){
+    const v=padded[i];
+    const raised=new Set(bitmaskToDots(v));
+    const hint=showHints?(hints[i]??null):null;
+    html+=`<div class="cell-col-t">`;
+    html+='<div class="dp-cell-sm">';
+    for(const d of DOT_ORDER)html+=`<div class="dp-dot-sm ${raised.has(d)?'on':'off'}"></div>`;
+    html+='</div>';
+    html+=`<div class="cell-hint-t${hint?'':' empty'}">${hint?esc(hint):' '}</div>`;
+    html+=`</div>`; // cell-col-t
+  }
+  panel.innerHTML=html+'</div>';
+}
+
+function renderGraphicPreview(panel, cells, hints=[]){
+  const padded=padCells(cells, CELLS_GRAPHIC);
+  const activeCnt=padded.filter(v=>v!==0).length;
+  const badge=document.getElementById('graphicActiveBadge');
+  if(badge) badge.textContent=`${activeCnt}셀 활성`;
+
+  let html=`<div style="overflow-x:auto;"><div style="display:flex;flex-direction:column;gap:3px;width:max-content;">`;
+  for(let ln=0;ln<LINES_PER_SCR;ln++){
+    html+=`<div style="display:flex;gap:2px;align-items:flex-start;">
+      <div style="font-size:9px;color:#c8c6bc;width:18px;text-align:right;margin-right:4px;font-weight:600;flex-shrink:0;padding-top:3px;">L${ln+1}</div>`;
+    for(let col=0;col<CELLS_PER_LINE;col++){
+      const idx=ln*CELLS_PER_LINE+col;
+      const v=padded[idx]??0;
+      const raised=new Set(bitmaskToDots(v));
+      const hint=showHints?(hints[idx]??null):null;
+      html+=`<div class="cell-col-g">`;
+      html+=`<div class="gp-cell">`;
+      for(const d of DOT_ORDER_8){
+        const isCursor=(d===7||d===8);
+        html+=`<div class="gp-dot ${isCursor?'cursor':raised.has(d)?'on':'off'}"></div>`;
+      }
+      html+=`</div>`;
+      // 힌트: 글자 첫 셀은 원문 표시, 이어지는 셀은 숨김
+      html+=`<div class="cell-hint-g${hint?'':' empty'}">${hint?esc(hint):' '}</div>`;
+      html+=`</div>`; // cell-col-g
+    }
+    html+='</div>';
+  }
+  panel.innerHTML=html+'</div></div>';
+}
+
+// ============================================================
+// 시각화 렌더링
+// ============================================================
+function renderCell(v,small=false){
+  const raised=new Set(bitmaskToDots(v));
+  const cc=small?'bd-mini-cell':'braille-cell',dc=small?'bd-mini-dot':'dot';
+  let h=`<div class="${cc}">`;
+  for(const d of DOT_ORDER)h+=`<div class="${dc} ${raised.has(d)?'on':'off'}" title="dot${d}"></div>`;
+  return h+'</div>';
+}
+function renderAll(result){
+  allCells=[];
+  graphicCellHints=[];
+  for(const item of result){
+    for(const c of item.cells) allCells.push(c.v);
+    // 힌트: 첫 셀 = 원문 글자, 나머지 = null
+    if(item.cells.length>0){
+      graphicCellHints.push(item.type==='space'?'·':item.orig);
+      for(let i=1;i<item.cells.length;i++) graphicCellHints.push(null);
+    }
+  }
+
+  // 수동 입력 모드: 전송 대상에 따라 textLineCells 도 갱신
+  if(!pdfMode){
+    if(dispMode==='text'){
+      textLineCells=[...allCells];
+      textCellHints=[...graphicCellHints].slice(0,CELLS_TEXT);
+    } else {
+      textLineCells=allCells.slice(0, CELLS_TEXT);
+      textCellHints=graphicCellHints.slice(0, CELLS_TEXT);
+    }
+    const sub=document.getElementById('textAreaSub');
+    if(sub) sub.textContent=dispMode==='text'?'수동 입력 (20셀)':'앞 20셀 미리보기';
+  }
+
+  const cont=document.getElementById('cellsDisplay');
+  if(!result.length){cont.innerHTML='<div class="empty-state"><div class="empty-icon">⠿</div><p>변환 가능한 문자가 없습니다</p></div>';return;}
+  let html='',totalC=0;
+  for(const item of result){
+    if(!item.cells.length)continue;
+    html+=`<div class="cell-group"><div class="cell-char">${esc(item.label)}</div><div style="display:flex;gap:3px;">`;
+    for(const c of item.cells){
+      if(item.type==='space')html+='<div class="space-cell"><span class="space-label">SPC</span></div>';
+      else{html+=renderCell(c.v);totalC++;}
+    }
+    html+='</div>';
+    const uni=item.cells.map(c=>item.type==='space'?'⠀':toUnicode(c.v)).join('');
+    html+=`<div class="cell-unicode">${uni}</div></div>`;
+  }
+  cont.innerHTML=html;
+  document.getElementById('cellCount').textContent=totalC;
+
+  let uni='';
+  for(const item of result)for(const c of item.cells)uni+=toUnicode(c.v);
+  document.getElementById('unicodeDisplay').textContent=uni||'';
+
+  const typeLabel={hangul:'한글',letter:'영문',digit:'숫자',latin:'라틴',unknown:'?',space:'공백'};
+  let bdH='';
+  for(const item of result){
+    if(item.type==='space'){bdH+=`<div class="breakdown-char"><div class="bd-original" style="color:#c8c6bc">␣</div><div class="bd-cells"><div style="width:20px;height:30px;border:1px dashed #e8e6dc;border-radius:3px"></div></div><div class="bd-unicode" style="color:#e0ddd4">⠀</div><div class="bd-type">space</div></div>`;continue;}
+    if(!item.cells.length){bdH+=`<div class="breakdown-char"><div class="bd-original" style="color:#c09070">${esc(item.orig)}</div><div class="bd-cells"><span style="font-size:10px;color:#c09070">?</span></div><div class="bd-unicode" style="color:#c09070">-</div><div class="bd-type">unknown</div></div>`;continue;}
+    bdH+=`<div class="breakdown-char"><div class="bd-original">${esc(item.orig)}</div><div class="bd-cells">`;
+    for(const c of item.cells)bdH+=renderCell(c.v,true);
+    bdH+=`</div><div class="bd-unicode">${item.cells.map(c=>toUnicode(c.v)).join('')}</div><div class="bd-type">${typeLabel[item.type]||item.type} · ${item.cells.length}셀</div></div>`;
+  }
+  document.getElementById('breakdownDisplay').innerHTML=bdH;
+  dotpadPage=0;updatePageUI();
+}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ============================================================
+// 상태 헬퍼
+// ============================================================
+function setStatus(state,text){document.getElementById('statusDot').className=`status-dot ${state}`;document.getElementById('statusLabel').textContent=text;}
+function showBadge(name){const b=document.getElementById('deviceBadge');b.textContent=name;b.style.display='inline';}
+function hideBadge(){document.getElementById('deviceBadge').style.display='none';}
+function addLog(type,msg){
+  const log=document.getElementById('sendLog');
+  const c={ok:'log-ok',err:'log-err',info:'log-info',key:'log-key',send:'log-send'};
+  const s=document.createElement('span');s.className=c[type]||'log-info';s.textContent=msg;
+  if(log.children.length>8)log.innerHTML='';
+  else if(log.children.length>0)log.appendChild(document.createTextNode('\n'));
+  log.appendChild(s);log.scrollTop=log.scrollHeight;
+}
+
+// ============================================================
+// 텍스트 입력 핸들러
+// ============================================================
+function onTextInput(){
+  if(pdfMode)return; // PDF 모드에선 텍스트 입력 무시
+  const text=document.getElementById('textInput').value;
+  document.getElementById('charCount').textContent=text.length;
+  if(!text.trim()){
+    document.getElementById('cellsDisplay').innerHTML='<div class="empty-state"><div class="empty-icon">⠿</div><p>텍스트를 입력하면 점자 셀이 표시됩니다</p></div>';
+    document.getElementById('unicodeDisplay').innerHTML='<span style="color:#c8c6bc;font-size:14px;">점자 유니코드 문자가 여기에 표시됩니다</span>';
+    document.getElementById('breakdownDisplay').innerHTML='';
+    document.getElementById('cellCount').textContent=0;
+    allCells=[];updatePageUI();return;
+  }
+  renderAll(convertText(text,lang));
+  scheduleAutoSend();
+}
+function setLang(l){
+  lang=l;
+  document.getElementById('btnKo').classList.toggle('active',l==='ko');
+  document.getElementById('btnEn').classList.toggle('active',l==='en');
+  document.getElementById('langInfo').textContent=l==='ko'?'현재: 한국어 점자':'Mode: English Grade 1';
+  document.getElementById('langStat').innerHTML=`모드 <span>${l==='ko'?'한국어':'English'}</span>`;
+  document.getElementById('textInput').placeholder=l==='ko'
+    ?'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...'
+    :'Type English text — sends to DotPad in real time...';
+  if(!pdfMode) onTextInput();
+}
+function setGrade(g){
+  grade=g;
+  // 모든 Grade 버튼 상태 동기화
+  ['btnG1','btnG2','pdfBtnG1','pdfBtnG2'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.classList.toggle('active',(id.endsWith('G1')&&g===1)||(id.endsWith('G2')&&g===2));
+  });
+  const gLabel=g===2?'G2 약자':'G1';
+  const gs=document.getElementById('gradeStat');
+  if(gs)gs.innerHTML=`등급 <span>${gLabel}</span>`;
+  if(pdfMode) displayPdfPage(pdfCurrentPage);
+  else onTextInput();
+}
+function copyUnicode(){
+  const t=document.getElementById('unicodeDisplay').textContent;
+  if(!t||t.includes('여기에'))return;
+  navigator.clipboard.writeText(t).then(()=>{
+    const b=document.getElementById('copyBtn');
+    b.textContent='복사됨 ✓';b.classList.add('copied');
+    setTimeout(()=>{b.textContent='복사';b.classList.remove('copied');},2000);
+  });
+}
+
+// ============================================================
+// 초기화
+// ============================================================
+window.onload=()=>{
+  if(!navigator.bluetooth){
+    document.getElementById('bleWarn').style.display='block';
+    document.getElementById('connectBtn').disabled=true;
+    addLog('err','Web Bluetooth 미지원 (Chrome 필요)');
+  }else{
+    addLog('info','Chrome 감지됨. BLE 연결 버튼으로 닷패드와 연결하거나, PDF를 불러오세요.');
+  }
+  renderBothPreviews([], []);
+  document.getElementById('textInput').value='안녕하세요';
+  onTextInput();
+};
+</script>
+</body>
+</html>
