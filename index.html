@@ -55,6 +55,11 @@ textarea::placeholder{color:#c8c6bc;}
 .stat{font-size:12px;color:#b0aea5;}
 .stat span{color:#141413;font-weight:600;}
 
+/* ── Language select ── */
+.lang-select{background:#f0efe9;border:1.5px solid #e8e6dc;border-radius:9px;padding:6px 10px;font-size:13px;font-weight:600;color:#141413;cursor:pointer;font-family:'Poppins','Arial',sans-serif;outline:none;transition:border-color .18s;}
+.lang-select:focus{border-color:#d97757;box-shadow:0 0 0 3px rgba(217,119,87,.1);}
+.lang-select option{font-weight:600;}
+
 /* ── Live badge ── */
 .live-badge{display:inline-flex;align-items:center;gap:6px;background:#f5f2ee;border:1px solid #e8e6dc;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:600;color:#b0aea5;transition:all .2s;}
 .live-badge.active{background:#eef4e8;border-color:#c4d4a8;color:#788c5d;}
@@ -433,10 +438,16 @@ textarea::placeholder{color:#c8c6bc;}
     <!-- PDF page lang + grade toggle -->
     <div class="toggle-row" style="margin-bottom:12px;">
       <span style="font-size:12px;color:#b0aea5;font-weight:600;">점역 언어</span>
-      <div class="seg">
-        <button class="seg-btn active" id="pdfBtnKo" onclick="setPdfLang('ko')">🇰🇷 한국어</button>
-        <button class="seg-btn" id="pdfBtnEn" onclick="setPdfLang('en')">🇺🇸 English</button>
-      </div>
+      <select id="pdfLangSelect" class="lang-select" onchange="setPdfLang(this.value)">
+        <option value="ko" selected>🇰🇷 한국어</option>
+        <option value="en">🇺🇸 English</option>
+        <option value="ja">🇯🇵 日本語</option>
+        <option value="zh">🇨🇳 中文</option>
+        <option value="fr">🇫🇷 Français</option>
+        <option value="de">🇩🇪 Deutsch</option>
+        <option value="es">🇪🇸 Español</option>
+        <option value="ar">🇸🇦 العربية</option>
+      </select>
       <div class="seg">
         <button class="seg-btn active" id="pdfBtnG1" onclick="setGrade(1)" title="Grade 1 완전풀기">G1</button>
         <button class="seg-btn" id="pdfBtnG2" onclick="setGrade(2)" title="Grade 2 약자">G2</button>
@@ -501,10 +512,16 @@ textarea::placeholder{color:#c8c6bc;}
 </div>
 
 <div class="toggle-row">
-  <div class="seg">
-    <button class="seg-btn active" id="btnKo" onclick="setLang('ko')">🇰🇷 한국어</button>
-    <button class="seg-btn" id="btnEn" onclick="setLang('en')">🇺🇸 English</button>
-  </div>
+  <select id="langSelect" class="lang-select" onchange="setLang(this.value)">
+    <option value="ko" selected>🇰🇷 한국어</option>
+    <option value="en">🇺🇸 English</option>
+    <option value="ja">🇯🇵 日本語</option>
+    <option value="zh">🇨🇳 中文</option>
+    <option value="fr">🇫🇷 Français</option>
+    <option value="de">🇩🇪 Deutsch</option>
+    <option value="es">🇪🇸 Español</option>
+    <option value="ar">🇸🇦 العربية</option>
+  </select>
   <div class="seg">
     <button class="seg-btn active" id="btnG1" onclick="setGrade(1)" title="Grade 1: 완전풀기 (모든 음절 그대로 표기)">G1 완전</button>
     <button class="seg-btn" id="btnG2" onclick="setGrade(2)" title="Grade 2: 약자 (UEB 약자 / 한국어 약어)">G2 약자</button>
@@ -747,6 +764,20 @@ const JAMO_BRAILLE={
 };
 
 // ============================================================
+// 언어 메타데이터 (UI 표시 + 내장 엔진 vs LibLouis 필요 여부 판별)
+// ============================================================
+const LANG_META={
+  ko:{flag:'🇰🇷', name:'한국어', placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...',  needsLouis:false},
+  en:{flag:'🇺🇸', name:'English',  placeholder:'Type English text — sends to DotPad in real time...',              needsLouis:false},
+  ja:{flag:'🇯🇵', name:'日本語',   placeholder:'日本語テキストを入力してください...',                              needsLouis:true},
+  zh:{flag:'🇨🇳', name:'中文',     placeholder:'请输入中文文字...',                                               needsLouis:true},
+  fr:{flag:'🇫🇷', name:'Français', placeholder:'Saisissez du texte en français...',                               needsLouis:true},
+  de:{flag:'🇩🇪', name:'Deutsch',  placeholder:'Deutschen Text hier eingeben...',                                 needsLouis:true},
+  es:{flag:'🇪🇸', name:'Español',  placeholder:'Escriba texto en español...',                                     needsLouis:true},
+  ar:{flag:'🇸🇦', name:'العربية',  placeholder:'أدخل النص العربي هنا...',                                        needsLouis:true},
+};
+
+// ============================================================
 // BLE 상수
 // ============================================================
 const BLE_SVC='49535343-fe7d-4ae5-8fa9-9fafd205e455';
@@ -802,7 +833,9 @@ async function initLibLouis(){
       louisReady=true;
       console.log('[LibLouis] ✓ 초기화 완료, 버전:',liblouis.version());
       updateLouisStatusBadge(true);
-      // 현재 입력창 내용이 있으면 재변환 트리거
+      // langInfo "로딩 중" 메시지 제거 + 재변환
+      setLang(lang);
+      if(pdfMode) setPdfLang(pdfLang);
       const ta=document.getElementById('textInput');
       if(ta&&ta.value) onTextInput();
     }
@@ -2015,8 +2048,8 @@ async function prefetchNeighborPages(currentPage){
 }
 function setPdfLang(l){
   pdfLang=l;
-  document.getElementById('pdfBtnKo').classList.toggle('active',l==='ko');
-  document.getElementById('pdfBtnEn').classList.toggle('active',l==='en');
+  const sel=document.getElementById('pdfLangSelect');
+  if(sel) sel.value=l;
   if(!pdfMode) return;
   if(docType==='txt'||docType==='docx'){
     // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
@@ -2394,7 +2427,12 @@ function onNotify(e){
     if(fNum===0) return;
     addLog('key',`⌨ 기능키: F${fNum}`);
     if(fNum===1)      toggleHints();                        // F1: 힌트 토글
-    else if(fNum===2) setLang(lang==='ko'?'en':'ko');       // F2: 언어 전환 KO↔EN
+    else if(fNum===2){                                       // F2: 언어 순환 (LibLouis 지원 언어 포함)
+      const LANG_ORDER=Object.keys(LANG_META);
+      const next=LANG_ORDER[(LANG_ORDER.indexOf(lang)+1)%LANG_ORDER.length];
+      setLang(next);
+      addLog('info',`언어: ${LANG_META[next].flag} ${LANG_META[next].name}`);
+    }
     else if(fNum===3) setGrade(grade===1?2:1);              // F3: 등급 전환 G1↔G2
     // F4: 예약 (미정)
   }
@@ -2684,13 +2722,21 @@ function onTextInput(){
 }
 function setLang(l){
   lang=l;
-  document.getElementById('btnKo').classList.toggle('active',l==='ko');
-  document.getElementById('btnEn').classList.toggle('active',l==='en');
-  document.getElementById('langInfo').textContent=l==='ko'?'현재: 한국어 점자':`Mode: English Grade ${grade}`;
-  document.getElementById('langStat').innerHTML=`모드 <span>${l==='ko'?'한국어':'English'}</span>`;
-  document.getElementById('textInput').placeholder=l==='ko'
-    ?'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...'
-    :'Type English text — sends to DotPad in real time...';
+  const sel=document.getElementById('langSelect');
+  if(sel) sel.value=l;
+  const meta=LANG_META[l]||{name:l,placeholder:'',needsLouis:true};
+  // langInfo: 로딩 중 표시 (LibLouis 필요 언어인데 아직 준비 안 된 경우)
+  const langInfoEl=document.getElementById('langInfo');
+  if(langInfoEl){
+    if(meta.needsLouis && !louisReady)
+      langInfoEl.textContent=`⏳ ${meta.name} — LibLouis 초기화 중...`;
+    else if(l==='en')
+      langInfoEl.textContent=`Mode: English Grade ${grade}`;
+    else
+      langInfoEl.textContent=`현재: ${meta.flag} ${meta.name}`;
+  }
+  document.getElementById('langStat').innerHTML=`모드 <span>${meta.name}</span>`;
+  document.getElementById('textInput').placeholder=meta.placeholder;
   if(!pdfMode) onTextInput();
 }
 function setGrade(g){
@@ -2705,11 +2751,8 @@ function setGrade(g){
   const gLabel=g===2?'G2 약자':'G1';
   const gs=document.getElementById('gradeStat');
   if(gs)gs.innerHTML=`등급 <span>${gLabel}</span>`;
-  // langInfo 도 같이 갱신 (영어 모드일 때 등급 표시 동기화)
-  if(lang==='en'){
-    const li=document.getElementById('langInfo');
-    if(li) li.textContent=`Mode: English Grade ${g}`;
-  }
+  // langInfo 등급 표시 동기화 (언어 표시도 함께 갱신)
+  setLang(lang);
   if(pdfMode){
     // Grade 변경 시 셀 수 달라지므로 서브페이지 캐시 무효화
     pdfPageSubTexts={}; pdfCurrentSubPage=0;
