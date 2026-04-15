@@ -1122,38 +1122,21 @@ function onFileSelect(e){
  * 300셀 그래픽 영역에 맞게, 단락 경계를 최대한 보존
  */
 function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
-  // 빈 줄 기준으로 단락 분리
-  const paras=fullText.split(/\n{2,}/).map(p=>p.replace(/\r/g,'').trim()).filter(p=>p);
+  // 단어 단위로 페이지를 최대한 꽉 채움 (빈 줄 경계 무시하고 greedy packing)
+  const words=fullText.replace(/\r/g,'').split(/\s+/).filter(w=>w);
   const pages=[];
   let buf='', bufCells=0;
 
-  for(const para of paras){
-    const pc=textToCells(para, lang).length;
-    if(pc===0) continue;
-
-    if(bufCells+pc<=cellsPerPage){
-      // 현재 페이지에 붙이기
-      buf+=(buf?'\n\n':'')+para;
-      bufCells+=pc;
-    } else if(pc>cellsPerPage){
-      // 단락이 너무 길면: 현재 페이지 마감 후 단어 단위로 분할
-      if(buf){pages.push(buf); buf=''; bufCells=0;}
-      const words=para.split(/\s+/);
-      let wBuf='', wCells=0;
-      for(const w of words){
-        const wc=textToCells(w+' ', lang).length;
-        if(wCells+wc<=cellsPerPage){
-          wBuf+=(wBuf?' ':'')+w; wCells+=wc;
-        }else{
-          if(wBuf) pages.push(wBuf);
-          wBuf=w; wCells=wc;
-        }
-      }
-      if(wBuf){buf=wBuf; bufCells=wCells;}
+  for(const w of words){
+    const wc=textToCells(w, lang).length;
+    if(!wc) continue;
+    const space=(bufCells>0?1:0);
+    if(bufCells+space+wc<=cellsPerPage){
+      buf+=(buf?' ':'')+w;
+      bufCells+=space+wc;
     } else {
-      // 이 단락을 새 페이지로
       if(buf) pages.push(buf);
-      buf=para; bufCells=pc;
+      buf=w; bufCells=wc;
     }
   }
   if(buf) pages.push(buf);
