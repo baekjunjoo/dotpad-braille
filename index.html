@@ -765,6 +765,7 @@ let pdfMode=false;
 let pdfViewMode='graphic'; // 현재 페이지 뷰: 'graphic'(이미지) | 'text'(본문)
 let pdfCurrentSubPage=0;   // 현재 서브페이지 인덱스 (PDF 텍스트 long page 분할, 0-based)
 let pdfPageSubTexts={};    // {pageNum: string[]} 서브페이지 텍스트 캐시 (PDF 텍스트 전용)
+let pdfPageIsOcr={};      // Bug2 fix: {pageNum: boolean} OCR로 추출된 페이지 여부
 
 // 두 영역의 셀 (통합 미리보기용)
 let textLineCells=[];      // 텍스트 20셀 영역
@@ -1154,7 +1155,7 @@ function setupVirtualDoc(filename, pages, type){
   pdfTotalPages=pages.length;
   pdfCurrentPage=1;
   pdfPageTexts={};
-  pdfPageDots={}; pdfPageHasImg={};
+  pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
   pages.forEach((p,i)=>{
     if(typeof p==='string'){
       pdfPageTexts[i+1]=p;
@@ -1266,7 +1267,7 @@ async function loadPdf(file){
     pdfTotalPages=pdfDoc.numPages;
     pdfCurrentPage=1;
     pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
-    pdfPageSubTexts={}; pdfCurrentSubPage=0;
+    pdfPageSubTexts={}; pdfPageIsOcr={}; pdfCurrentSubPage=0;
     pdfMode=true; docType='pdf';
 
     document.getElementById('pdfFilename').textContent=file.name;
@@ -1365,6 +1366,7 @@ async function loadBrf(file){
     pdfPageTexts={};
     pdfPageDots={};
     pdfPageHasImg={};
+    pdfPageIsOcr={};
     pdfMode=true;
 
     // 페이지 캐시 구성
@@ -1395,7 +1397,7 @@ function closePdf(){
   const prevType=docType;
   pdfDoc=null; pdfMode=false; docType='none';
   pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
-  pdfPageSubTexts={}; pdfCurrentSubPage=0;
+  pdfPageSubTexts={}; pdfPageIsOcr={}; pdfCurrentSubPage=0;
   document.getElementById('dropZoneWrap').style.display='block';
   document.getElementById('pdfLoadedWrap').style.display='none';
   document.getElementById('dualBadge').style.display='none';
@@ -1503,7 +1505,7 @@ function imgSrcToDotCells(imgSrc){
  * 반환: 인식된 텍스트 (string)
  */
 async function ocrPdfPage(pdfPage){
-  const SCALE=3;
+  const SCALE=5; // Bug1 fix: 3x→5x (해상도 향상으로 OCR 정확도 개선)
   const viewport=pdfPage.getViewport({scale:SCALE});
   const canvas=document.createElement('canvas');
   canvas.width=viewport.width;
@@ -1512,6 +1514,20 @@ async function ocrPdfPage(pdfPage){
   ctx.fillStyle='#ffffff';
   ctx.fillRect(0,0,canvas.width,canvas.height);
   await pdfPage.render({canvasContext:ctx,viewport}).promise;
+
+  // Bug1 fix: OCR 전처리 — 그레이스케일 → 대비 강화 → 이진화
+  const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+  const d=imgData.data;
+  for(let i=0;i<d.length;i+=4){
+    // 그레이스케일
+    const gray=Math.round(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]);
+    // 대비 강화 (factor=1.8)
+    const contrast=Math.min(255,Math.max(0,Math.round((gray-128)*1.8+128)));
+    // 이진화 (임계값 140: 밝은 배경/어두운 글자 분리)
+    const bin=contrast<140?0:255;
+    d[i]=d[i+1]=d[i+2]=bin; d[i+3]=255;
+  }
+  ctx.putImageData(imgData,0,0);
 
   // 언어: 한국어 PDF면 kor+eng, 영어면 eng
   const lang=pdfLang==='ko'?'kor+eng':'eng';
@@ -1524,7 +1540,12 @@ async function ocrPdfPage(pdfPage){
         }
       }
     });
-    return result.data.text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+    // Bug3 fix: OCR 줄바꿈을 공백으로 정규화 → textToCells 행 패딩으로 아래로 밀리는 현상 제거
+    return result.data.text
+      .replace(/\r/g,'')
+      .replace(/[ \t]+/g,' ')
+      .replace(/\n+/g,' ')   // 모든 \n → 공백 (OCR 줄경계는 의미 없음)
+      .trim();
   }finally{
     hidePdfLoading();
   }
@@ -1666,6 +1687,8 @@ async function getPdfPageText(pageNum){
       console.log(`[OCR] 페이지 ${pageNum}: 텍스트 레이어 없음 → Tesseract OCR 실행`);
       try{
         text=await ocrPdfPage(page);
+        // Bug2 fix: OCR로 추출된 페이지 표시 → 텍스트 모드 + 힌트 활성화에 사용
+        if(text.length>0) pdfPageIsOcr[pageNum]=true;
       }catch(e){
         console.warn('[OCR] 실패:', e);
         text='';
@@ -1742,8 +1765,10 @@ async function displayPdfPage(pageNum, subPage){
     pdfCurrentSubPage=0;
   }
 
-  // 뷰 모드: 이미지 있으면 항상 graphic 우선, 텍스트만 있으면 text
-  pdfViewMode= hasImg ? 'graphic' : 'text';
+  // Bug2 fix: 네이티브 텍스트+이미지 → graphic(이미지 우선)
+  //           OCR로만 추출된 페이지 → text 모드 + 힌트 활성화
+  const pageIsOcr=pdfPageIsOcr[pageNum]||false;
+  pdfViewMode=(hasImg && !pageIsOcr) ? 'graphic' : 'text';
 
   // ── 페이지 이동 버튼 & 인디케이터 업데이트 ──
   const subCount=(pdfDoc&&!hasImg&&pdfPageSubTexts[pageNum])
