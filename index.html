@@ -1425,75 +1425,78 @@ async function pageHasImages(pdfPage){
 }
 
 /**
- * [Step 2] Sobel 엣지 검출 + 이진화
- * 입력: ImageData의 pixel data (Uint8ClampedArray), 너비/높이
- * 반환: 엣지 강조 후 이진화된 Uint8ClampedArray (어두운 픽셀 = 도트 ON)
+ * 캔버스 전처리: 그레이스케일 → 3×3 Gaussian blur → Otsu 이진화
+ * OCR 전처리와 동일한 파이프라인을 이미지→도트 변환에도 적용
  */
-function sobelEdgeDetect(data, width, height){
-  // 그레이스케일 변환
-  const gray=new Float32Array(width*height);
-  for(let i=0;i<width*height;i++){
-    gray[i]=0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2];
-  }
+function preprocessForDots(ctx, W, H){
+  const px=ctx.getImageData(0,0,W,H).data;
 
-  // Sobel 엣지 강도 계산
-  const edgeMag=new Float32Array(width*height);
-  let maxMag=0;
-  for(let y=1;y<height-1;y++){
-    for(let x=1;x<width-1;x++){
-      const gx=
-        -gray[(y-1)*width+(x-1)]+gray[(y-1)*width+(x+1)]
-        -2*gray[y*width+(x-1)]+2*gray[y*width+(x+1)]
-        -gray[(y+1)*width+(x-1)]+gray[(y+1)*width+(x+1)];
-      const gy=
-        -gray[(y-1)*width+(x-1)]-2*gray[(y-1)*width+x]-gray[(y-1)*width+(x+1)]
-        +gray[(y+1)*width+(x-1)]+2*gray[(y+1)*width+x]+gray[(y+1)*width+(x+1)];
-      const mag=Math.sqrt(gx*gx+gy*gy);
-      edgeMag[y*width+x]=mag;
-      if(mag>maxMag) maxMag=mag;
+  // 그레이스케일
+  const gray=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++)
+    gray[i]=0.299*px[i*4]+0.587*px[i*4+1]+0.114*px[i*4+2];
+
+  // 3×3 Gaussian blur (잡음 제거)
+  const blurred=new Float32Array(W*H);
+  const K=[1,2,1,2,4,2,1,2,1];
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    let sum=0,wt=0;
+    for(let ky=-1;ky<=1;ky++) for(let kx=-1;kx<=1;kx++){
+      const ny=y+ky,nx=x+kx;
+      if(ny>=0&&ny<H&&nx>=0&&nx<W){
+        const k=K[(ky+1)*3+(kx+1)]; sum+=gray[ny*W+nx]*k; wt+=k;
+      }
     }
+    blurred[y*W+x]=sum/wt;
   }
 
-  // 이진화: 엣지 강도 20% 이상 OR 매우 어두운 픽셀 → 도트 ON (픽셀값 0)
-  const edgeThreshold=maxMag*0.20;
-  const output=new Uint8ClampedArray(data.length);
-  for(let i=0;i<width*height;i++){
-    const isDot=(edgeMag[i]>edgeThreshold)||(gray[i]<90);
-    const val=isDot?0:255;
-    output[i*4]=output[i*4+1]=output[i*4+2]=val;
-    output[i*4+3]=255;
+  // Otsu's threshold (이미지별 최적 임계값 자동 계산)
+  const hist=new Int32Array(256);
+  for(let i=0;i<W*H;i++) hist[Math.round(blurred[i])]++;
+  let sumAll=0; for(let i=0;i<256;i++) sumAll+=i*hist[i];
+  let sumB=0,wB=0,maxVar=0,otsu=128;
+  for(let t=0;t<256;t++){
+    wB+=hist[t]; if(!wB) continue;
+    const wF=W*H-wB; if(!wF) break;
+    sumB+=t*hist[t];
+    const mB=sumB/wB, mF=(sumAll-sumB)/wF;
+    const v=wB*wF*(mB-mF)**2;
+    if(v>maxVar){maxVar=v;otsu=t;}
   }
-  return output;
+
+  // 이진화 적용
+  const binary=new Uint8ClampedArray(W*H*4);
+  for(let i=0;i<W*H;i++){
+    const b=blurred[i]<otsu?0:255;
+    binary[i*4]=binary[i*4+1]=binary[i*4+2]=b; binary[i*4+3]=255;
+  }
+  ctx.putImageData(new ImageData(binary,W,H),0,0);
 }
 
 /**
- * [Step 1+2+3] 이미지 URL/DataURL → 닷패드 dot cell 배열 (300개)
- * 가로세로 비율 유지하여 60×30 도트 그리드에 피팅 후 엣지 검출 → 이진화
+ * 이미지 URL/DataURL → 닷패드 dot cell 배열 (300개)
+ * fit-to-contain(비율 유지) + 중앙 배치 + preprocessForDots + 면적 샘플링
  */
 function imgSrcToDotCells(imgSrc){
   return new Promise((resolve,reject)=>{
     const img=new Image();
     img.onload=()=>{
-      const DOT_W=60,DOT_H=30,SCALE=3;
+      const DOT_W=60,DOT_H=30,SCALE=5;
       const canvW=DOT_W*SCALE,canvH=DOT_H*SCALE;
       const canvas=document.createElement('canvas');
       canvas.width=canvW; canvas.height=canvH;
       const ctx=canvas.getContext('2d');
-      // 흰 배경
       ctx.fillStyle='#ffffff';
       ctx.fillRect(0,0,canvW,canvH);
-      // 비율 유지하며 중앙 배치
+      // fit-to-contain: 가로/세로 모두 맞게 스케일, 중앙 배치
       const scale=Math.min(canvW/img.width,canvH/img.height);
       const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
       const ox=Math.round((canvW-w)/2),oy=Math.round((canvH-h)/2);
       ctx.drawImage(img,ox,oy,w,h);
-      // [Step 2] 엣지 검출 + 이진화
-      const raw=ctx.getImageData(0,0,canvW,canvH);
-      const processed=sobelEdgeDetect(raw.data,canvW,canvH);
-      ctx.putImageData(new ImageData(processed,canvW,canvH),0,0);
-      // [Step 3] 도트 셀 매핑
-      const final=ctx.getImageData(0,0,canvW,canvH);
-      resolve(canvasToDotCells(final,canvW,canvH,DOT_W,DOT_H));
+      // 전처리 (Gaussian blur + Otsu 이진화)
+      preprocessForDots(ctx,canvW,canvH);
+      // 면적 기반 도트 매핑
+      resolve(canvasToDotCells(ctx.getImageData(0,0,canvW,canvH),canvW,canvH,DOT_W,DOT_H));
     };
     img.onerror=reject;
     img.src=imgSrc;
@@ -1628,67 +1631,86 @@ async function ocrDocxImages(arrayBuffer){
 /**
  * PDF 페이지를 DotPad 그래픽 영역(30셀×10줄 = 60dot×30dot)으로 변환
  * 반환: 길이 300 의 bitmask 배열
+ *
+ * 개선사항:
+ *  ① SCALE 3→5: 도트당 5×5픽셀 확보 → 면적 샘플링 정밀도 향상
+ *  ② fit-to-contain: 가로+세로 모두 맞게 → 세로 PDF 상단만 잘리던 문제 해결
+ *  ③ 중앙 배치: PDF 페이지를 도트 그리드 중앙에 정렬
+ *  ④ Sobel 엣지 제거 → preprocessForDots(Gaussian+Otsu) 적용
+ *  ⑤ canvasToDotCells: 면적 기반 샘플링 (단일 픽셀 → 5×5 영역 평균)
  */
 async function renderPageToDots(pdfPage){
   if(pdfPageDots[pdfPage.pageNumber])
     return pdfPageDots[pdfPage.pageNumber];
 
-  const DOT_W=60, DOT_H=30;           // 전체 도트 해상도
-  const SCALE=3;                       // 렌더 배율 (선명도)
-  const canvW=DOT_W*SCALE, canvH=DOT_H*SCALE;
+  const DOT_W=60, DOT_H=30;
+  const SCALE=5;                        // ① 5×5 pixels/dot
+  const canvW=DOT_W*SCALE, canvH=DOT_H*SCALE; // 300×150
 
-  // 페이지를 캔버스에 렌더 (페이지 비율 유지, fit-to-width)
+  // ② fit-to-contain (가로·세로 모두 맞게, 비율 유지)
   const origVp=pdfPage.getViewport({scale:1});
-  const pageScale=(canvW/origVp.width);
+  const pageScale=Math.min(canvW/origVp.width, canvH/origVp.height);
   const vp=pdfPage.getViewport({scale:pageScale});
 
   const canvas=document.createElement('canvas');
-  canvas.width=canvW;
-  canvas.height=Math.min(Math.ceil(vp.height), canvH); // 높이 초과 시 상단만
-
+  canvas.width=canvW; canvas.height=canvH;
   const ctx=canvas.getContext('2d');
   ctx.fillStyle='#ffffff';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  await pdfPage.render({canvasContext:ctx,viewport:vp}).promise;
+  ctx.fillRect(0,0,canvW,canvH);
 
-  const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
-  // [Step 2] Sobel 엣지 검출 + 이진화로 촉각 인지 최적화
-  const processed=sobelEdgeDetect(imgData.data,canvas.width,canvas.height);
-  const processedData=new ImageData(processed,canvas.width,canvas.height);
-  // [Step 3] 도트 셀 매핑
-  const cells=canvasToDotCells(processedData,canvas.width,canvas.height,DOT_W,DOT_H);
+  // ③ 중앙 배치 (렌더된 페이지를 캔버스 가운데로)
+  const ox=Math.round((canvW-vp.width)/2);
+  const oy=Math.round((canvH-vp.height)/2);
+  await pdfPage.render({canvasContext:ctx, viewport:vp, transform:[1,0,0,1,ox,oy]}).promise;
+
+  // ④ 전처리 (Sobel 제거 → Gaussian blur + Otsu 이진화)
+  preprocessForDots(ctx, canvW, canvH);
+
+  // ⑤ 면적 기반 도트 셀 매핑
+  const cells=canvasToDotCells(ctx.getImageData(0,0,canvW,canvH),canvW,canvH,DOT_W,DOT_H);
   pdfPageDots[pdfPage.pageNumber]=cells;
   return cells;
 }
 
 /**
  * ImageData → DotPad bitmask 배열 (300개)
- * DOT_W×DOT_H 도트 공간에서 각 도트 위치의 픽셀 밝기로 on/off 판단
+ * 면적 기반 샘플링: 각 도트 커버리지 영역(≈5×5px) 내 어두운 픽셀 비율로 ON/OFF 결정
+ * - 단일 픽셀 샘플링 대비 얇은 선·경계 누락 방지
+ * - darkThresh: 영역 내 어두운 픽셀 비율 ≥ 이 값이면 도트 ON (기본 30%)
  */
-function canvasToDotCells(imgData,cW,cH,DOT_W,DOT_H){
+function canvasToDotCells(imgData,cW,cH,DOT_W,DOT_H,darkThresh=0.30){
   const {data,width,height}=imgData;
   const cells=[];
   const CELLS_X=DOT_W/2;  // 30 cells per row
   const CELLS_Y=DOT_H/3;  // 10 lines
-  // dot 위치 (cell 내 상대): [dotIdx] → {colOff, rowOff}  (col 0-1, row 0-2)
   const DOT_POS=[{c:0,r:0},{c:0,r:1},{c:0,r:2},{c:1,r:0},{c:1,r:1},{c:1,r:2}];
-  // bitmask bit order: dot1=bit0 .. dot6=bit5
+
+  const dotPxW=cW/DOT_W;  // 도트 1개당 캔버스 픽셀 너비
+  const dotPxH=cH/DOT_H;  // 도트 1개당 캔버스 픽셀 높이
 
   for(let ly=0;ly<CELLS_Y;ly++){
     for(let lx=0;lx<CELLS_X;lx++){
       let mask=0;
       for(let di=0;di<6;di++){
         const {c,r}=DOT_POS[di];
-        const dotX=lx*2+c;   // 0..59
-        const dotY=ly*3+r;   // 0..29
-        // 캔버스 픽셀 좌표 (SCALE 고려)
-        const px=Math.floor(dotX*cW/DOT_W);
-        const py=Math.floor(dotY*cH/DOT_H);
-        if(px<width&&py<height){
+        const dotX=lx*2+c;  // 0..59
+        const dotY=ly*3+r;  // 0..29
+
+        // 이 도트가 커버하는 캔버스 픽셀 영역
+        const x0=Math.floor(dotX*dotPxW);
+        const y0=Math.floor(dotY*dotPxH);
+        const x1=Math.min(Math.ceil((dotX+1)*dotPxW),width);
+        const y1=Math.min(Math.ceil((dotY+1)*dotPxH),height);
+
+        // 영역 내 어두운 픽셀 비율 계산
+        let dark=0,total=0;
+        for(let py=y0;py<y1;py++) for(let px=x0;px<x1;px++){
           const idx=(py*width+px)*4;
-          const brightness=(data[idx]*0.299+data[idx+1]*0.587+data[idx+2]*0.114);
-          if(brightness<175) mask|=(1<<di); // 어두우면 도트 ON
+          const lum=data[idx]*0.299+data[idx+1]*0.587+data[idx+2]*0.114;
+          if(lum<128) dark++;
+          total++;
         }
+        if(total>0 && dark/total>=darkThresh) mask|=(1<<di);
       }
       cells.push(mask);
     }
