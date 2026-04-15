@@ -1659,6 +1659,17 @@ function canvasToDotCells(imgData,cW,cH,DOT_W,DOT_H){
   return cells;
 }
 
+/**
+ * 텍스트가 실제 의미 있는 내용인지 판별
+ * 한글/영문 2자 이상 단어가 5개 이상이면 "진짜 텍스트"로 간주
+ * → 스캐너 embedded OCR의 garbled 텍스트나 페이지 번호만 있는 경우 false 반환
+ */
+function looksLikeRealText(text){
+  if(!text||text.length<5) return false;
+  const words=(text.match(/[a-zA-Z가-힣]{2,}/g)||[]);
+  return words.length>=5;
+}
+
 async function getPdfPageText(pageNum){
   if(pdfPageTexts[pageNum]) return pdfPageTexts[pageNum];
   const page=await pdfDoc.getPage(pageNum);
@@ -1680,18 +1691,22 @@ async function getPdfPageText(pageNum){
   // 정리: 과도한 공백·줄바꿈 제거
   text=text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
 
-  // ── OCR fallback: 텍스트 레이어가 없는 이미지 기반 페이지 처리 ──
-  if(text.length<10){
+  // ── OCR fallback: (1) 텍스트 없음 OR (2) 의미 없는 garbled 텍스트 ──
+  // 스캐너가 임베딩한 짧은/깨진 텍스트를 네이티브로 오인하는 문제 방지
+  const nativeIsReal=looksLikeRealText(text);
+  if(!nativeIsReal){
     const hasImg=await pageHasImages(page);
     if(hasImg){
-      console.log(`[OCR] 페이지 ${pageNum}: 텍스트 레이어 없음 → Tesseract OCR 실행`);
+      const reason=text.length<10?'텍스트 레이어 없음':'의미 없는 텍스트(garbled)';
+      console.log(`[OCR] 페이지 ${pageNum}: ${reason} → Tesseract OCR 실행`);
       try{
-        text=await ocrPdfPage(page);
-        // Bug2 fix: OCR로 추출된 페이지 표시 → 텍스트 모드 + 힌트 활성화에 사용
-        if(text.length>0) pdfPageIsOcr[pageNum]=true;
+        const ocrText=await ocrPdfPage(page);
+        if(ocrText.length>0){
+          text=ocrText;
+          pdfPageIsOcr[pageNum]=true; // OCR로 추출 → text 모드 + 힌트 활성화
+        }
       }catch(e){
         console.warn('[OCR] 실패:', e);
-        text='';
       }
     }
   }
