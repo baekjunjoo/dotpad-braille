@@ -11,6 +11,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <!-- Tesseract.js (이미지 OCR) -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<!-- LibLouis (다국어 점역 엔진) — emscripten build가 Module global 설정 후 easy-api가 래핑 -->
+<script>
+  // emscripten 초기화 완료 콜백 — liblouis-no-tables.js 로드 전에 선언해야 함
+  var Module = { onRuntimeInitialized: function(){ window._louisCoreReady = true; } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/liblouis-js@0.2.0/liblouis-no-tables.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/liblouis-js@0.2.0/easy-api.js"></script>
 <style>
 /* ── Brand tokens: #faf9f5 #ffffff #e8e6dc #b0aea5 #141413 #d97757 #6a9bcc #788c5d ── */
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -318,6 +325,10 @@ textarea::placeholder{color:#c8c6bc;}
     <div class="live-badge" id="liveBadge">
       <div class="live-dot"></div>
       <span id="liveText" class="badge-text">대기 중</span>
+    </div>
+    <div class="live-badge" id="louisStatusBadge">
+      <div class="live-dot"></div>
+      <span class="badge-text">LibLouis 로딩 중…</span>
     </div>
   </div>
 
@@ -749,6 +760,92 @@ const CELLS_GRAPHIC=CELLS_PER_LINE*LINES_PER_SCR; // 300
 // ============================================================
 let lang='ko', dispMode='text', allCells=[], allGraphicCells=[], dotpadPage=0;
 let grade=1; // 1=Grade1(완전풀기), 2=Grade2(약자)
+
+// ============================================================
+// LibLouis 점역 엔진
+// ============================================================
+let louisReady=false;
+
+/** language 코드 + grade → LibLouis 테이블 파일명 */
+const LOUIS_TABLES={
+  'ko':  {1:'ko-g1.ctb',        2:'ko-g2.ctb'},
+  'en':  {1:'en-ueb-g1.ctb',    2:'en-ueb-g2.ctb'},
+  'ja':  {1:'ja-kantenji.utb',  2:'ja-kantenji.utb'},
+  'zh':  {1:'zh-chn.ctb',       2:'zh-chn.ctb'},
+  'fr':  {1:'fr-fr-g1.utb',     2:'fr-bfu-g2.ctb'},
+  'de':  {1:'de-de-g1.ctb',     2:'de-de-g2.ctb'},
+  'es':  {1:'es-g1.ctb',        2:'es-g1.ctb'},
+  'ar':  {1:'ar-ar-g1.utb',     2:'ar-ar-g1.utb'},
+};
+
+/** LibLouis 초기화 — 페이지 로드 후 비동기 실행 */
+async function initLibLouis(){
+  // emscripten Module 준비 대기 (최대 5초)
+  for(let i=0;i<50;i++){
+    if(window._louisCoreReady && typeof liblouis!=='undefined') break;
+    await new Promise(r=>setTimeout(r,100));
+  }
+  if(!window._louisCoreReady || typeof liblouis==='undefined'){
+    console.warn('[LibLouis] 모듈 로드 실패 — 기존 점역 엔진으로 동작');
+    return;
+  }
+  try{
+    liblouis.setLiblouisBuild(Module);
+    liblouis.setLogLevel(liblouis.LOG ? liblouis.LOG.OFF : 0);
+    // jsdelivr CDN에서 테이블 on-demand 로딩
+    liblouis.enableOnDemandTableLoading(
+      'https://cdn.jsdelivr.net/npm/liblouis-js@0.2.0/tables/'
+    );
+    // 초기화 확인: 한국어 테이블로 빠른 테스트
+    const test=liblouis.translateString('ko-g1.ctb','안');
+    if(test && test.length>0){
+      louisReady=true;
+      console.log('[LibLouis] ✓ 초기화 완료, 버전:',liblouis.version());
+      updateLouisStatusBadge(true);
+      // 현재 입력창 내용이 있으면 재변환 트리거
+      const ta=document.getElementById('inputText');
+      if(ta&&ta.value) onInput();
+    }
+  }catch(e){
+    console.warn('[LibLouis] 초기화 오류:', e);
+  }
+}
+
+/**
+ * LibLouis로 텍스트 → bitmask 배열 변환
+ * 반환: number[] (닷패드 bitmask) | null (실패 시)
+ */
+function louisTextToCells(text, language, g){
+  if(!louisReady) return null;
+  const tables=LOUIS_TABLES[language]||LOUIS_TABLES['en'];
+  const table=tables[g||1];
+  try{
+    const braille=liblouis.translateString(table, text);
+    if(!braille) return null;
+    // Unicode 점자 (U+2800~U+28FF) → bitmask: charCode - 0x2800
+    return [...braille].map(c=>c.charCodeAt(0)-0x2800);
+  }catch(e){
+    console.warn('[LibLouis] 변환 실패:', e);
+    return null;
+  }
+}
+
+/** LibLouis 상태 배지 UI 업데이트 */
+function updateLouisStatusBadge(ready){
+  const el=document.getElementById('louisStatusBadge');
+  if(!el) return;
+  const dot=el.querySelector('.live-dot');
+  const txt=el.querySelector('.badge-text');
+  if(ready){
+    if(dot){dot.style.background='#788c5d';}
+    if(txt) txt.textContent='⠿ LibLouis ON';
+    el.classList.add('active');
+  }else{
+    if(dot){dot.style.background='#d0cec4';}
+    if(txt) txt.textContent='⠿ LibLouis OFF';
+    el.classList.remove('active');
+  }
+}
 let bleDevice=null, bleChar=null, isSending=false;
 let sendVersion=0;   // 전송 버전 — 증가 시 진행 중인 전송 즉시 취소
 const ackResolvers=new Map(); // lineId → resolve fn (ACK 기반 전송용)
@@ -1084,6 +1181,15 @@ function convertText(text, language){
 }
 
 function textToCells(text, language){
+  // LibLouis 우선 — 초기화 완료 & 해당 언어 테이블 존재 시
+  if(louisReady && text && LOUIS_TABLES[language]){
+    const grade=document.getElementById('gradeSelect')
+      ? parseInt(document.getElementById('gradeSelect').value)||1
+      : 1;
+    const cells=louisTextToCells(text, language, grade);
+    if(cells!==null) return cells;
+  }
+  // Fallback: 기존 내장 변환기
   const res=convertText(text, language);
   const cells=[];
   for(const item of res) for(const c of item.cells) cells.push(c.v);
@@ -2666,6 +2772,8 @@ window.onload=()=>{
   renderBothPreviews([], []);
   document.getElementById('textInput').value='안녕하세요';
   onTextInput();
+  // LibLouis 비동기 초기화 (백그라운드)
+  initLibLouis().catch(e=>console.warn('[LibLouis] 초기화 실패:',e));
 };
 </script>
 </body>
