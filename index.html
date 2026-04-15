@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <!-- Mammoth.js (DOCX → 텍스트 추출) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<!-- Tesseract.js (이미지 OCR) -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 /* ── Brand tokens: #faf9f5 #ffffff #e8e6dc #b0aea5 #141413 #d97757 #6a9bcc #788c5d ── */
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -1143,7 +1145,9 @@ function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
   return pages.length?pages:['(내용 없음)'];
 }
 
-/** TXT/DOCX 공통 가상 문서 설정 */
+/** TXT/DOCX 공통 가상 문서 설정
+ * pages 항목: 문자열(텍스트 페이지) 또는 {type:'image', dots:Uint8Array(300)}(이미지 페이지)
+ */
 function setupVirtualDoc(filename, pages, type){
   docType=type;
   pdfDoc=null;            // PDF.js 객체 없음
@@ -1151,7 +1155,19 @@ function setupVirtualDoc(filename, pages, type){
   pdfCurrentPage=1;
   pdfPageTexts={};
   pdfPageDots={}; pdfPageHasImg={};
-  pages.forEach((p,i)=>{ pdfPageTexts[i+1]=p; }); // 텍스트 미리 캐시
+  pages.forEach((p,i)=>{
+    if(typeof p==='string'){
+      pdfPageTexts[i+1]=p;
+      pdfPageHasImg[i+1]=false;
+    } else if(p&&p.type==='image'){
+      pdfPageTexts[i+1]='';
+      pdfPageDots[i+1]=p.dots;
+      pdfPageHasImg[i+1]=true;
+    } else {
+      pdfPageTexts[i+1]=String(p||'');
+      pdfPageHasImg[i+1]=false;
+    }
+  }); // 혼합 페이지 캐시 (텍스트 + 이미지)
   pdfMode=true;
 
   const typeIcon={pdf:'📄',docx:'📝',txt:'📃'}[type]||'📄';
@@ -1180,18 +1196,59 @@ async function loadTxt(file){
   }
 }
 
-/** DOCX 로더 (mammoth.js 사용) */
+/** DOCX 로더 (mammoth.js 사용) — 텍스트 + 이미지 동시 추출 */
 async function loadDocx(file){
   if(typeof mammoth==='undefined'){addLog('err','mammoth.js 로드 실패 — 인터넷 연결을 확인하세요');return;}
   showPdfLoading(`${file.name} 불러오는 중...`);
   try{
     const arrayBuffer=await file.arrayBuffer();
-    const result=await mammoth.extractRawText({arrayBuffer});
-    const text=result.value;
-    if(!text.trim()){hidePdfLoading();addLog('err','DOCX에서 텍스트를 추출할 수 없습니다');return;}
-    if(result.messages.length>0) addLog('info',`⚠ 변환 경고: ${result.messages[0].message}`);
-    const pages=splitTextToPages(text, pdfLang);
-    setupVirtualDoc(file.name, pages, 'docx');
+
+    // ── [Step 1] 텍스트 추출 + HTML 변환(이미지 포함) 병렬 수행 ──
+    const [textResult, htmlResult]=await Promise.all([
+      mammoth.extractRawText({arrayBuffer}),
+      mammoth.convertToHtml({arrayBuffer})
+    ]);
+    let text=textResult.value.trim();
+
+    // ── [Step 1] 임베디드 이미지 추출 ──
+    const parser=new DOMParser();
+    const htmlDoc=parser.parseFromString(htmlResult.value,'text/html');
+    const imgEls=Array.from(htmlDoc.querySelectorAll('img[src^="data:image"]'));
+    addLog('info',`DOCX 분석: 텍스트 ${text.length}자, 이미지 ${imgEls.length}개 감지`);
+
+    // ── OCR fallback: 텍스트 거의 없고 이미지만 있는 경우 ──
+    if(text.length<10 && imgEls.length>0){
+      addLog('info','텍스트 없음 → 이미지 OCR 시도 중...');
+      try{ text=await ocrDocxImages(arrayBuffer); }
+      catch(e){ console.warn('[OCR] DOCX OCR 실패:',e); text=''; }
+    }
+
+    // ── [Step 2+3] 이미지 전처리 → 도트 셀 변환 ──
+    const imagePages=[];
+    for(let i=0;i<imgEls.length;i++){
+      showPdfLoading(`이미지 처리 중... (${i+1}/${imgEls.length})`);
+      try{
+        const dots=await imgSrcToDotCells(imgEls[i].src);
+        imagePages.push({type:'image', dots});
+        addLog('info',`✓ 이미지 ${i+1} 촉각 변환 완료`);
+      }catch(e){
+        console.warn(`[Image] DOCX 이미지 ${i+1} 처리 실패:`,e);
+      }
+    }
+
+    // 텍스트도 없고 이미지 처리도 실패하면 에러
+    if(!text&&imagePages.length===0){
+      hidePdfLoading();
+      addLog('err','DOCX에서 콘텐츠를 추출할 수 없습니다');
+      return;
+    }
+    if(textResult.messages.length>0) addLog('info',`⚠ 변환 경고: ${textResult.messages[0].message}`);
+
+    // 이미지 페이지 먼저, 텍스트 페이지 뒤
+    const textPages=text?splitTextToPages(text,pdfLang):[];
+    const allPages=[...imagePages,...textPages];
+
+    setupVirtualDoc(file.name, allPages, 'docx');
   }catch(e){
     hidePdfLoading();
     addLog('err',`DOCX 오류: ${e.message}`);
@@ -1366,6 +1423,151 @@ async function pageHasImages(pdfPage){
 }
 
 /**
+ * [Step 2] Sobel 엣지 검출 + 이진화
+ * 입력: ImageData의 pixel data (Uint8ClampedArray), 너비/높이
+ * 반환: 엣지 강조 후 이진화된 Uint8ClampedArray (어두운 픽셀 = 도트 ON)
+ */
+function sobelEdgeDetect(data, width, height){
+  // 그레이스케일 변환
+  const gray=new Float32Array(width*height);
+  for(let i=0;i<width*height;i++){
+    gray[i]=0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2];
+  }
+
+  // Sobel 엣지 강도 계산
+  const edgeMag=new Float32Array(width*height);
+  let maxMag=0;
+  for(let y=1;y<height-1;y++){
+    for(let x=1;x<width-1;x++){
+      const gx=
+        -gray[(y-1)*width+(x-1)]+gray[(y-1)*width+(x+1)]
+        -2*gray[y*width+(x-1)]+2*gray[y*width+(x+1)]
+        -gray[(y+1)*width+(x-1)]+gray[(y+1)*width+(x+1)];
+      const gy=
+        -gray[(y-1)*width+(x-1)]-2*gray[(y-1)*width+x]-gray[(y-1)*width+(x+1)]
+        +gray[(y+1)*width+(x-1)]+2*gray[(y+1)*width+x]+gray[(y+1)*width+(x+1)];
+      const mag=Math.sqrt(gx*gx+gy*gy);
+      edgeMag[y*width+x]=mag;
+      if(mag>maxMag) maxMag=mag;
+    }
+  }
+
+  // 이진화: 엣지 강도 20% 이상 OR 매우 어두운 픽셀 → 도트 ON (픽셀값 0)
+  const edgeThreshold=maxMag*0.20;
+  const output=new Uint8ClampedArray(data.length);
+  for(let i=0;i<width*height;i++){
+    const isDot=(edgeMag[i]>edgeThreshold)||(gray[i]<90);
+    const val=isDot?0:255;
+    output[i*4]=output[i*4+1]=output[i*4+2]=val;
+    output[i*4+3]=255;
+  }
+  return output;
+}
+
+/**
+ * [Step 1+2+3] 이미지 URL/DataURL → 닷패드 dot cell 배열 (300개)
+ * 가로세로 비율 유지하여 60×30 도트 그리드에 피팅 후 엣지 검출 → 이진화
+ */
+function imgSrcToDotCells(imgSrc){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const DOT_W=60,DOT_H=30,SCALE=3;
+      const canvW=DOT_W*SCALE,canvH=DOT_H*SCALE;
+      const canvas=document.createElement('canvas');
+      canvas.width=canvW; canvas.height=canvH;
+      const ctx=canvas.getContext('2d');
+      // 흰 배경
+      ctx.fillStyle='#ffffff';
+      ctx.fillRect(0,0,canvW,canvH);
+      // 비율 유지하며 중앙 배치
+      const scale=Math.min(canvW/img.width,canvH/img.height);
+      const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
+      const ox=Math.round((canvW-w)/2),oy=Math.round((canvH-h)/2);
+      ctx.drawImage(img,ox,oy,w,h);
+      // [Step 2] 엣지 검출 + 이진화
+      const raw=ctx.getImageData(0,0,canvW,canvH);
+      const processed=sobelEdgeDetect(raw.data,canvW,canvH);
+      ctx.putImageData(new ImageData(processed,canvW,canvH),0,0);
+      // [Step 3] 도트 셀 매핑
+      const final=ctx.getImageData(0,0,canvW,canvH);
+      resolve(canvasToDotCells(final,canvW,canvH,DOT_W,DOT_H));
+    };
+    img.onerror=reject;
+    img.src=imgSrc;
+  });
+}
+
+/**
+ * PDF 페이지를 canvas로 렌더링 후 Tesseract.js OCR 실행
+ * 반환: 인식된 텍스트 (string)
+ */
+async function ocrPdfPage(pdfPage){
+  const SCALE=3;
+  const viewport=pdfPage.getViewport({scale:SCALE});
+  const canvas=document.createElement('canvas');
+  canvas.width=viewport.width;
+  canvas.height=viewport.height;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  await pdfPage.render({canvasContext:ctx,viewport}).promise;
+
+  // 언어: 한국어 PDF면 kor+eng, 영어면 eng
+  const lang=pdfLang==='ko'?'kor+eng':'eng';
+  showPdfLoading('이미지 OCR 중...');
+  try{
+    const result=await Tesseract.recognize(canvas,lang,{
+      logger:m=>{
+        if(m.status==='recognizing text'){
+          showPdfLoading(`OCR ${Math.round(m.progress*100)}%...`);
+        }
+      }
+    });
+    return result.data.text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+  }finally{
+    hidePdfLoading();
+  }
+}
+
+/**
+ * DOCX 파일의 이미지를 추출해 Tesseract.js OCR 실행
+ * 반환: 전체 페이지 인식 텍스트 (string)
+ */
+async function ocrDocxImages(arrayBuffer){
+  // mammoth HTML 변환으로 embedded 이미지(base64) 추출
+  const htmlResult=await mammoth.convertToHtml({arrayBuffer});
+  const parser=new DOMParser();
+  const doc=parser.parseFromString(htmlResult.value,'text/html');
+  const imgs=Array.from(doc.querySelectorAll('img[src^="data:image"]'));
+
+  if(imgs.length===0) return '';
+
+  const lang=pdfLang==='ko'?'kor+eng':'eng';
+  const texts=[];
+
+  for(let i=0;i<imgs.length;i++){
+    showPdfLoading(`이미지 OCR 중... (${i+1}/${imgs.length})`);
+    try{
+      const result=await Tesseract.recognize(imgs[i].src,lang,{
+        logger:m=>{
+          if(m.status==='recognizing text'){
+            showPdfLoading(`OCR ${i+1}/${imgs.length}: ${Math.round(m.progress*100)}%...`);
+          }
+        }
+      });
+      const t=result.data.text.trim();
+      if(t) texts.push(t);
+    }catch(e){
+      console.warn(`[OCR] DOCX 이미지 ${i+1} 실패:`,e);
+    }
+  }
+
+  hidePdfLoading();
+  return texts.join('\n\n').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+/**
  * PDF 페이지를 DotPad 그래픽 영역(30셀×10줄 = 60dot×30dot)으로 변환
  * 반환: 길이 300 의 bitmask 배열
  */
@@ -1392,7 +1594,11 @@ async function renderPageToDots(pdfPage){
   await pdfPage.render({canvasContext:ctx,viewport:vp}).promise;
 
   const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
-  const cells=canvasToDotCells(imgData,canvas.width,canvas.height,DOT_W,DOT_H);
+  // [Step 2] Sobel 엣지 검출 + 이진화로 촉각 인지 최적화
+  const processed=sobelEdgeDetect(imgData.data,canvas.width,canvas.height);
+  const processedData=new ImageData(processed,canvas.width,canvas.height);
+  // [Step 3] 도트 셀 매핑
+  const cells=canvasToDotCells(processedData,canvas.width,canvas.height,DOT_W,DOT_H);
   pdfPageDots[pdfPage.pageNumber]=cells;
   return cells;
 }
@@ -1452,6 +1658,21 @@ async function getPdfPageText(pageNum){
   }
   // 정리: 과도한 공백·줄바꿈 제거
   text=text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
+
+  // ── OCR fallback: 텍스트 레이어가 없는 이미지 기반 페이지 처리 ──
+  if(text.length<10){
+    const hasImg=await pageHasImages(page);
+    if(hasImg){
+      console.log(`[OCR] 페이지 ${pageNum}: 텍스트 레이어 없음 → Tesseract OCR 실행`);
+      try{
+        text=await ocrPdfPage(page);
+      }catch(e){
+        console.warn('[OCR] 실패:', e);
+        text='';
+      }
+    }
+  }
+
   pdfPageTexts[pageNum]=text;
   return text;
 }
@@ -1496,7 +1717,8 @@ async function displayPdfPage(pageNum, subPage){
     ]);
     if(hasImg) imgDots=await renderPageToDots(pdfPage);
 
-    // 텍스트 모드일 때 서브페이지 분할
+    // 이미지 우선: 이미지가 있으면 항상 graphic 모드 (OCR 텍스트가 있어도 이미지 먼저)
+    // 텍스트 모드일 때 서브페이지 분할 (이미지 없는 순수 텍스트 페이지만)
     if(!hasImg && fullText){
       const subs=getOrBuildSubPages(pageNum, fullText);
       const subIdx=Math.min(pdfCurrentSubPage, subs.length-1);
@@ -1513,13 +1735,14 @@ async function displayPdfPage(pageNum, subPage){
     text=pdfPageTexts[pageNum]||''; // 유니코드 점자 미리보기 텍스트
     pdfCurrentSubPage=0;
   } else {
-    // ── TXT / DOCX: 캐시된 텍스트(이미 ≤300셀), 이미지 없음 ──
+    // ── TXT / DOCX: 텍스트 페이지 또는 이미지 페이지 ──
     text=pdfPageTexts[pageNum]||'';
-    hasImg=false;
+    hasImg=pdfPageHasImg[pageNum]||false;
+    imgDots=pdfPageDots[pageNum]||null;
     pdfCurrentSubPage=0;
   }
 
-  // 뷰 모드: BRF는 항상 graphic, PDF에 이미지 있으면 graphic, 나머지 text
+  // 뷰 모드: 이미지 있으면 항상 graphic 우선, 텍스트만 있으면 text
   pdfViewMode= hasImg ? 'graphic' : 'text';
 
   // ── 페이지 이동 버튼 & 인디케이터 업데이트 ──
