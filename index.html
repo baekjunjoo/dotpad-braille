@@ -441,8 +441,7 @@ textarea::placeholder{color:#c8c6bc;}
       <select id="pdfLangSelect" class="lang-select" onchange="setPdfLang(this.value)">
         <option value="ko" selected>🇰🇷 한국어</option>
         <option value="en">🇺🇸 English</option>
-        <option value="ja">🇯🇵 日本語</option>
-        <option value="zh">🇨🇳 中文</option>
+
         <option value="fr">🇫🇷 Français</option>
         <option value="de">🇩🇪 Deutsch</option>
         <option value="es">🇪🇸 Español</option>
@@ -769,8 +768,6 @@ const JAMO_BRAILLE={
 const LANG_META={
   ko:{flag:'🇰🇷', name:'한국어', greeting:'안녕하세요',   placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...',  needsLouis:false},
   en:{flag:'🇺🇸', name:'English',  greeting:'Hello',       placeholder:'Type English text — sends to DotPad in real time...',              needsLouis:false},
-  ja:{flag:'🇯🇵', name:'日本語',   greeting:'こんにちは',  placeholder:'日本語テキストを入力してください...',                              needsLouis:true},
-  zh:{flag:'🇨🇳', name:'中文',     greeting:'你好',        placeholder:'请输入中文文字...',                                               needsLouis:true},
   fr:{flag:'🇫🇷', name:'Français', greeting:'Bonjour',     placeholder:'Saisissez du texte en français...',                               needsLouis:true},
   de:{flag:'🇩🇪', name:'Deutsch',  greeting:'Hallo',       placeholder:'Deutschen Text hier eingeben...',                                 needsLouis:true},
   es:{flag:'🇪🇸', name:'Español',  greeting:'Hola',        placeholder:'Escriba texto en español...',                                     needsLouis:true},
@@ -801,8 +798,6 @@ let louisReady=false;
 const LOUIS_TABLES={
   'ko':  {1:'ko-g1.ctb',        2:'ko-g2.ctb'},
   'en':  {1:'en-ueb-g1.ctb',    2:'en-ueb-g2.ctb'},
-  'ja':  {1:'ja-kantenji.utb',  2:'ja-kantenji.utb'},
-  'zh':  {1:'zh-chn.ctb',       2:'zh-chn.ctb'},
   'fr':  {1:'fr-fr-g1.utb',     2:'fr-bfu-g2.ctb'},
   'de':  {1:'de-de-g1.ctb',     2:'de-de-g2.ctb'},
   'es':  {1:'es-g1.ctb',        2:'es-g1.ctb'},
