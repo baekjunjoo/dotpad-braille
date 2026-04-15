@@ -767,14 +767,14 @@ const JAMO_BRAILLE={
 // 언어 메타데이터 (UI 표시 + 내장 엔진 vs LibLouis 필요 여부 판별)
 // ============================================================
 const LANG_META={
-  ko:{flag:'🇰🇷', name:'한국어', placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...',  needsLouis:false},
-  en:{flag:'🇺🇸', name:'English',  placeholder:'Type English text — sends to DotPad in real time...',              needsLouis:false},
-  ja:{flag:'🇯🇵', name:'日本語',   placeholder:'日本語テキストを入力してください...',                              needsLouis:true},
-  zh:{flag:'🇨🇳', name:'中文',     placeholder:'请输入中文文字...',                                               needsLouis:true},
-  fr:{flag:'🇫🇷', name:'Français', placeholder:'Saisissez du texte en français...',                               needsLouis:true},
-  de:{flag:'🇩🇪', name:'Deutsch',  placeholder:'Deutschen Text hier eingeben...',                                 needsLouis:true},
-  es:{flag:'🇪🇸', name:'Español',  placeholder:'Escriba texto en español...',                                     needsLouis:true},
-  ar:{flag:'🇸🇦', name:'العربية',  placeholder:'أدخل النص العربي هنا...',                                        needsLouis:true},
+  ko:{flag:'🇰🇷', name:'한국어', greeting:'안녕하세요',   placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...',  needsLouis:false},
+  en:{flag:'🇺🇸', name:'English',  greeting:'Hello',       placeholder:'Type English text — sends to DotPad in real time...',              needsLouis:false},
+  ja:{flag:'🇯🇵', name:'日本語',   greeting:'こんにちは',  placeholder:'日本語テキストを入力してください...',                              needsLouis:true},
+  zh:{flag:'🇨🇳', name:'中文',     greeting:'你好',        placeholder:'请输入中文文字...',                                               needsLouis:true},
+  fr:{flag:'🇫🇷', name:'Français', greeting:'Bonjour',     placeholder:'Saisissez du texte en français...',                               needsLouis:true},
+  de:{flag:'🇩🇪', name:'Deutsch',  greeting:'Hallo',       placeholder:'Deutschen Text hier eingeben...',                                 needsLouis:true},
+  es:{flag:'🇪🇸', name:'Español',  greeting:'Hola',        placeholder:'Escriba texto en español...',                                     needsLouis:true},
+  ar:{flag:'🇸🇦', name:'العربية',  greeting:'مرحبا',       placeholder:'أدخل النص العربي هنا...',                                        needsLouis:true},
 };
 
 // ============================================================
@@ -2736,7 +2736,10 @@ function setLang(l){
       langInfoEl.textContent=`현재: ${meta.flag} ${meta.name}`;
   }
   document.getElementById('langStat').innerHTML=`모드 <span>${meta.name}</span>`;
-  document.getElementById('textInput').placeholder=meta.placeholder;
+  const ta=document.getElementById('textInput');
+  ta.placeholder=meta.placeholder;
+  // 언어 전환 시 해당 언어 인사말로 예시 텍스트 교체
+  if(meta.greeting) ta.value=meta.greeting;
   if(!pdfMode) onTextInput();
 }
 function setGrade(g){
@@ -2781,7 +2784,7 @@ window.onload=()=>{
     addLog('info','Chrome 감지됨. BLE 연결 버튼으로 닷패드와 연결하거나, PDF를 불러오세요.');
   }
   renderBothPreviews([], []);
-  document.getElementById('textInput').value='안녕하세요';
+  document.getElementById('textInput').value=LANG_META[lang]?.greeting||'안녕하세요';
   onTextInput();
   // LibLouis 비동기 초기화 (백그라운드)
   initLibLouis().catch(e=>console.warn('[LibLouis] 초기화 실패:',e));
