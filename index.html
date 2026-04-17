@@ -1527,47 +1527,34 @@ async function loadPdf(file){
  * LF=줄바꿈  FF=페이지나누기  CR=무시
  */
 function parseBrfToCellPages(content){
-  const COLS=CELLS_PER_LINE;      // 30
-  const ROWS=LINES_PER_SCR;       // 10
-  const PAGE=CELLS_GRAPHIC;       // 300
+  const PAGE=CELLS_GRAPHIC; // 300
 
   const pages=[];
-  let curLine=[], curPage=[];
 
-  function commitLine(){
-    while(curLine.length<COLS) curLine.push(0);
-    curPage.push(curLine.slice(0,COLS));
-    curLine=[];
-  }
-  function commitPage(){
-    if(curLine.length>0) commitLine();
-    while(curPage.length<ROWS) curPage.push(new Array(COLS).fill(0));
-    const cells=new Uint8Array(PAGE);
-    for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) cells[r*COLS+c]=curPage[r][c];
-    pages.push(cells);
-    curPage=[];
-    curLine=[];
+  // FF(0x0C)로 구분된 BRF 섹션 단위로 처리
+  const sections=content.replace(/\r/g,'').split('\f');
+
+  for(const section of sections){
+    // 섹션 내 점자 셀을 순서대로 수집 — LF 무시(reflow): 셀을 좌→우·위→아래로 꽉 채움
+    const sectionCells=[];
+    for(let i=0;i<section.length;i++){
+      const code=section.charCodeAt(i);
+      if(code===10) continue; // LF: 행 경계 무시, 연속 배치
+      if(code>=32 && code<=127) sectionCells.push((code-32)&0x3F);
+    }
+
+    // 실질적으로 빈 섹션(공백만) 스킵
+    if(!sectionCells.some(c=>c>0)) continue;
+
+    // 300셀 단위로 DotPad 페이지 분할 (넘치면 자동으로 다음 페이지)
+    for(let start=0;start<sectionCells.length;start+=PAGE){
+      const cells=new Uint8Array(PAGE);
+      const end=Math.min(start+PAGE,sectionCells.length);
+      for(let j=0;j<end-start;j++) cells[j]=sectionCells[start+j];
+      pages.push(cells);
+    }
   }
 
-  for(let i=0;i<content.length;i++){
-    const code=content.charCodeAt(i);
-    if(code===13) continue;                             // CR: 무시
-    if(code===12){                                      // FF: 페이지 나누기
-      if(curLine.length>0||curPage.length>0) commitPage();
-      continue;
-    }
-    if(code===10){                                      // LF: 줄 바꿈
-      commitLine();
-      if(curPage.length===ROWS) commitPage();
-      continue;
-    }
-    if(code>=32 && code<=127){
-      // 30셀(COLS)을 넘어가면 버림 — LF/FF까지 대기 (wrap 금지)
-      // BRF 표준 40자 라인을 DotPad 30셀에 맞게 트런케이트하여 행마다 꽉 채움
-      if(curLine.length<COLS) curLine.push((code-32)&0x3F);
-    }
-  }
-  if(curLine.length>0||curPage.length>0) commitPage();
   return pages.length>0?pages:[new Uint8Array(PAGE)];
 }
 
