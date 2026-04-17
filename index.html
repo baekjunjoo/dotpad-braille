@@ -1476,8 +1476,9 @@ function parseBrfToCellPages(content){
       continue;
     }
     if(code>=32 && code<=127){
-      curLine.push((code-32)&0x3F);                    // 6점 비트마스크 (64이상=확장점 마스킹)
-      if(curLine.length>=COLS){ commitLine(); if(curPage.length===ROWS) commitPage(); }
+      // 30셀(COLS)을 넘어가면 버림 — LF/FF까지 대기 (wrap 금지)
+      // BRF 표준 40자 라인을 DotPad 30셀에 맞게 트런케이트하여 행마다 꽉 채움
+      if(curLine.length<COLS) curLine.push((code-32)&0x3F);
     }
   }
   if(curLine.length>0||curPage.length>0) commitPage();
@@ -2191,7 +2192,16 @@ async function sendPdfDual(bodyText, pageNum, imgDots=null){
   }
 
   // 힌트 계산
-  const gHints=(pdfViewMode==='graphic'&&imgDots)?[]:buildCellHints(bodyText||'',pdfLang);
+  let gHints;
+  if(isBrf()){
+    // BRF: 유니코드 점자 문자(pdfPageTexts)를 셀별 힌트로 사용
+    // ⠀(U+2800, 빈 점자)는 null, 그 외 점자 문자는 힌트로 표시
+    const brfText=pdfPageTexts[pageNum]||'';
+    gHints=[...brfText].filter(c=>c!=='\n').slice(0,CELLS_GRAPHIC)
+           .map(c=>(c==='\u2800'||!c)?null:c);
+  } else {
+    gHints=(pdfViewMode==='graphic'&&imgDots)?[]:buildCellHints(bodyText||'',pdfLang);
+  }
   const tHints=buildCellHints(pageLabel,'en');
 
   // 미리보기 즉시 업데이트 (BLE 전송과 무관하게 항상)
