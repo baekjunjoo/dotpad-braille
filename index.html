@@ -1601,6 +1601,11 @@ async function loadBrf(file){
     pdfPageHasImg={};
     pdfPageIsOcr={};
     pdfMode=true;
+    // BRF/BRL은 대부분 영어 점자 — 역번역 기본 언어를 영어로 설정
+    pdfLang='en';
+    _brfHintsCache.clear();
+    const pdfLangSel=document.getElementById('pdfLangSelect');
+    if(pdfLangSel) pdfLangSel.value='en';
 
     // 페이지 캐시 구성
     cellPages.forEach((cells,i)=>{
