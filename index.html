@@ -1524,35 +1524,28 @@ async function loadPdf(file){
 /**
  * BRF ASCII 내용 → 6점 셀 배열 페이지로 변환
  * 규칙: 문자코드 - 32 = 점자 6점 비트마스크 (0x20=' '=0 ~ 0x5F='_'=63)
- * LF=줄바꿈  FF=페이지나누기  CR=무시
+ * LF·FF·CR 모두 무시 — 전체 파일을 셀 스트림으로 취급, 300셀 단위로 분할
  */
 function parseBrfToCellPages(content){
   const PAGE=CELLS_GRAPHIC; // 300
 
+  // LF(10)·FF(12)·CR(13) 모두 무시 — 순수 셀 스트림 수집
+  const allCells=[];
+  for(let i=0;i<content.length;i++){
+    const code=content.charCodeAt(i);
+    if(code>=32 && code<=127) allCells.push((code-32)&0x3F);
+  }
+
+  // 내용 없는 파일
+  if(!allCells.some(c=>c>0)) return [new Uint8Array(PAGE)];
+
+  // 300셀 단위로 DotPad 페이지 분할 — 마지막 페이지는 남은 셀만큼만 채움
   const pages=[];
-
-  // FF(0x0C)로 구분된 BRF 섹션 단위로 처리
-  const sections=content.replace(/\r/g,'').split('\f');
-
-  for(const section of sections){
-    // 섹션 내 점자 셀을 순서대로 수집 — LF 무시(reflow): 셀을 좌→우·위→아래로 꽉 채움
-    const sectionCells=[];
-    for(let i=0;i<section.length;i++){
-      const code=section.charCodeAt(i);
-      if(code===10) continue; // LF: 행 경계 무시, 연속 배치
-      if(code>=32 && code<=127) sectionCells.push((code-32)&0x3F);
-    }
-
-    // 실질적으로 빈 섹션(공백만) 스킵
-    if(!sectionCells.some(c=>c>0)) continue;
-
-    // 300셀 단위로 DotPad 페이지 분할 (넘치면 자동으로 다음 페이지)
-    for(let start=0;start<sectionCells.length;start+=PAGE){
-      const cells=new Uint8Array(PAGE);
-      const end=Math.min(start+PAGE,sectionCells.length);
-      for(let j=0;j<end-start;j++) cells[j]=sectionCells[start+j];
-      pages.push(cells);
-    }
+  for(let start=0;start<allCells.length;start+=PAGE){
+    const cells=new Uint8Array(PAGE);
+    const end=Math.min(start+PAGE,allCells.length);
+    for(let j=0;j<end-start;j++) cells[j]=allCells[start+j];
+    pages.push(cells);
   }
 
   return pages.length>0?pages:[new Uint8Array(PAGE)];
