@@ -922,6 +922,91 @@ function buildCellHints(text, language){
   }
   return hints;
 }
+// ── BRF/BRL 역번역 힌트 빌더 ─────────────────────────────────
+// LibLouis backTranslateString으로 유니코드 점자 → 텍스트 변환
+// Grade 1: 셀:글자 ≈ 1:1 → 직접 매핑
+// Grade 2: 공백 기준 단어 세그먼트 분리 후 텍스트 단어와 1:1 대응,
+//          축약어(1셀→여러글자)는 해당 셀들에 균등 배분
+function buildBrfTextHints(brailleUnicode, language, gradeNum){
+  if(!louisReady || !brailleUnicode) return null;
+  const table=(LOUIS_TABLES[language]||LOUIS_TABLES['en'])[gradeNum===2?2:1];
+  if(!table) return null;
+
+  const allHints=[];
+  const lines=brailleUnicode.split('\n');
+
+  for(const line of lines){
+    if(!line) continue;
+    const brailleChars=[...line];
+
+    // LibLouis 역번역 (줄 전체)
+    let text='';
+    try{ text=liblouis.backTranslateString(table, line)||''; }
+    catch(e){ text=''; }
+
+    if(!text){
+      // 역번역 실패 → 유니코드 점자 문자 그대로 힌트
+      for(const bc of brailleChars)
+        allHints.push(bc==='\u2800'?null:bc);
+      continue;
+    }
+
+    if(gradeNum!==2){
+      // ── Grade 1: 셀 ↔ 글자 1:1 직접 매핑 ──────────────────
+      const textChars=[...text];
+      let ti=0;
+      for(const bc of brailleChars)
+        allHints.push(bc==='\u2800'?null:(textChars[ti++]??null));
+    } else {
+      // ── Grade 2: 공백 기준 세그먼트 정렬 ─────────────────────
+      // 1) 브레일 줄을 공백셀(⠀) 기준으로 단어 세그먼트로 분리
+      const segments=[]; // {type:'word'|'space', cells:[]}
+      let wordCells=[];
+      for(const bc of brailleChars){
+        if(bc==='\u2800'){
+          if(wordCells.length) { segments.push({type:'word',cells:wordCells}); wordCells=[]; }
+          segments.push({type:'space'});
+        } else {
+          wordCells.push(bc);
+        }
+      }
+      if(wordCells.length) segments.push({type:'word',cells:wordCells});
+
+      // 2) 역번역 텍스트를 공백으로 분리
+      const textWords=text.match(/\S+/g)||[];
+      let wi=0;
+
+      for(const seg of segments){
+        if(seg.type==='space'){
+          allHints.push(null); // 공백 셀
+          continue;
+        }
+        const word=textWords[wi++]||'';
+        const wordChars=[...word];
+        const nc=seg.cells.length;   // 브레일 셀 수
+        const tc=wordChars.length;   // 텍스트 글자 수
+
+        for(let ci=0;ci<nc;ci++){
+          if(tc===0){
+            allHints.push(null);
+          } else if(nc>=tc){
+            // 셀 ≥ 글자: 1:1, 남는 셀은 null
+            allHints.push(wordChars[ci]??null);
+          } else {
+            // 셀 < 글자 (축약어): 글자를 셀에 균등 배분
+            // 예) "the"(3글자) → 1셀: 해당 셀에 "the" 표시
+            const from=Math.floor(ci*tc/nc);
+            const to=Math.floor((ci+1)*tc/nc);
+            allHints.push(wordChars.slice(from,to).join('')||null);
+          }
+        }
+      }
+    }
+  }
+
+  return allHints.slice(0,CELLS_GRAPHIC);
+}
+
 function toggleHints(){
   showHints=!showHints;
   const btn=document.getElementById('hintToggleBtn');
@@ -1216,6 +1301,7 @@ function convertText(text, language){
 
 const _cellCache=new Map(); // 변환 결과 메모이제이션 (key: "lang:grade:text")
 const _CELL_CACHE_MAX=200;  // 최대 항목 수 (LRU-lite: 초과 시 가장 오래된 항목 제거)
+const _brfHintsCache=new Map(); // BRF 역번역 힌트 캐시 (key: "pageNum:lang:grade")
 
 function textToCells(text, language){
   // LibLouis 우선 — 초기화 완료 & 해당 언어 테이블 존재 시
@@ -2042,6 +2128,7 @@ async function prefetchNeighborPages(currentPage){
 }
 function setPdfLang(l){
   pdfLang=l;
+  _brfHintsCache.clear(); // 언어 변경 → BRF 역번역 캐시 무효화
   const sel=document.getElementById('pdfLangSelect');
   if(sel) sel.value=l;
   if(!pdfMode) return;
@@ -2194,11 +2281,21 @@ async function sendPdfDual(bodyText, pageNum, imgDots=null){
   // 힌트 계산
   let gHints;
   if(isBrf()){
-    // BRF: 유니코드 점자 문자(pdfPageTexts)를 셀별 힌트로 사용
-    // ⠀(U+2800, 빈 점자)는 null, 그 외 점자 문자는 힌트로 표시
-    const brfText=pdfPageTexts[pageNum]||'';
-    gHints=[...brfText].filter(c=>c!=='\n').slice(0,CELLS_GRAPHIC)
-           .map(c=>(c==='\u2800'||!c)?null:c);
+    // BRF: liblouis 역번역 힌트 (캐시 적용)
+    const cacheKey=`${pageNum}:${pdfLang}:${grade}`;
+    if(!_brfHintsCache.has(cacheKey)){
+      const brfText=pdfPageTexts[pageNum]||'';
+      const hints=buildBrfTextHints(brfText, pdfLang, grade);
+      if(hints){
+        _brfHintsCache.set(cacheKey, hints);
+      } else {
+        // liblouis 미준비 시 fallback: 유니코드 점자 문자 그대로 표시
+        _brfHintsCache.set(cacheKey,
+          [...brfText].filter(c=>c!=='\n').slice(0,CELLS_GRAPHIC)
+            .map(c=>(c==='\u2800'||!c)?null:c));
+      }
+    }
+    gHints=_brfHintsCache.get(cacheKey)||[];
   } else {
     gHints=(pdfViewMode==='graphic'&&imgDots)?[]:buildCellHints(bodyText||'',pdfLang);
   }
@@ -2748,6 +2845,7 @@ function setLang(l){
 function setGrade(g){
   grade=g;
   _cellCache.clear(); // 등급 변경 → 변환 결과 캐시 무효화
+  _brfHintsCache.clear(); // 등급 변경 → BRF 역번역 캐시 무효화
   if(isSending) cancelSend(); // 진행 중인 전송 중단
   // 모든 Grade 버튼 상태 동기화
   ['btnG1','btnG2','pdfBtnG1','pdfBtnG2'].forEach(id=>{
