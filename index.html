@@ -1524,22 +1524,31 @@ async function loadPdf(file){
 /**
  * BRF ASCII 내용 → 6점 셀 배열 페이지로 변환
  * 규칙: 문자코드 - 32 = 점자 6점 비트마스크 (0x20=' '=0 ~ 0x5F='_'=63)
- * LF·FF·CR 모두 무시 — 전체 파일을 셀 스트림으로 취급, 300셀 단위로 분할
+ * LF 무시(reflow), FF → 현재 행 마무리 + 빈 행 1줄 삽입, CR 무시
+ * 전체를 300셀 단위로 DotPad 페이지 분할
  */
 function parseBrfToCellPages(content){
   const PAGE=CELLS_GRAPHIC; // 300
+  const ROW=CELLS_PER_LINE; // 30
 
-  // LF(10)·FF(12)·CR(13) 모두 무시 — 순수 셀 스트림 수집
   const allCells=[];
   for(let i=0;i<content.length;i++){
     const code=content.charCodeAt(i);
+    if(code===13) continue;  // CR: 무시
+    if(code===10) continue;  // LF: 무시 (reflow)
+    if(code===12){           // FF: 현재 행 끝까지 패딩 후 빈 행 1줄 삽입
+      const rem=allCells.length%ROW;
+      if(rem>0) for(let j=0;j<ROW-rem;j++) allCells.push(0); // 현재 행 마무리
+      for(let j=0;j<ROW;j++) allCells.push(0);               // 빈 행 1줄
+      continue;
+    }
     if(code>=32 && code<=127) allCells.push((code-32)&0x3F);
   }
 
   // 내용 없는 파일
   if(!allCells.some(c=>c>0)) return [new Uint8Array(PAGE)];
 
-  // 300셀 단위로 DotPad 페이지 분할 — 마지막 페이지는 남은 셀만큼만 채움
+  // 300셀 단위로 DotPad 페이지 분할
   const pages=[];
   for(let start=0;start<allCells.length;start+=PAGE){
     const cells=new Uint8Array(PAGE);
