@@ -9,6 +9,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <!-- Mammoth.js (DOCX → 텍스트 추출) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<!-- JSZip — eBraille (.ebrl) OCF ZIP 컨테이너 파싱용 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <!-- Tesseract.js (이미지 OCR) -->
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <!-- LibLouis (다국어 점역 엔진) — emscripten build가 Module global 설정 후 easy-api가 래핑 -->
@@ -407,7 +409,7 @@ textarea::placeholder{color:#c8c6bc;}
   <div id="dropZoneWrap">
     <div class="drop-zone" id="dropZone"
       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
-      <input type="file" accept=".pdf,.docx,.doc,.txt,.brf,.brl,.ebrf" onchange="onFileSelect(event)">
+      <input type="file" accept=".pdf,.docx,.doc,.txt,.brf,.brl,.ebrf,.ebrl" onchange="onFileSelect(event)">
       <div class="drop-icon">📂</div>
       <div class="drop-title">파일을 여기에 드래그하거나 클릭</div>
       <div class="drop-sub" style="margin-bottom:10px;">점자로 변환하여 닷패드에 출력합니다</div>
@@ -890,7 +892,7 @@ let pdfDoc=null, pdfLang='ko';
 let pdfCurrentPage=1, pdfTotalPages=0;
 let pdfPageTexts={};      // {pageNum: string}         텍스트 캐시
 let pdfOrigFullText='';   // TXT/DOCX 원본 전문 (언어 변경 시 재분할에 사용) — BUG-07 fix
-let docType='none';       // 'pdf'|'docx'|'txt'|'brf'|'brl'|'ebrf' — 현재 로드된 파일 타입
+let docType='none';       // 'pdf'|'docx'|'txt'|'brf'|'brl'|'ebrf'|'ebrl' — 현재 로드된 파일 타입
 let pdfPageDots={};       // {pageNum: Uint8Array(300)} 이미지→도트 캐시
 let pdfPageHasImg={};     // {pageNum: boolean}         이미지 포함 여부 캐시
 let pdfMode=false;
@@ -1339,8 +1341,9 @@ function routeFileLoad(file){
   else if(name.endsWith('.docx')||name.endsWith('.doc')) loadDocx(file);
   else if(name.endsWith('.txt')) loadTxt(file);
   else if(name.endsWith('.brf')||name.endsWith('.brl')) loadBrf(file);
-  else if(name.endsWith('.ebrf')) loadEbrf(file);
-  else addLog('err',`지원하지 않는 형식입니다 — PDF, DOCX, TXT, BRF, BRL, EBRF만 가능`);
+  else if(name.endsWith('.ebrf')) loadEbrf(file);   // 구형 XML-BRF 래퍼
+  else if(name.endsWith('.ebrl')) loadEbrl(file);   // DAISY eBraille 1.0 표준
+  else addLog('err',`지원하지 않는 형식입니다 — PDF, DOCX, TXT, BRF, BRL, EBRF, EBRL만 가능`);
 }
 function onDrop(e){
   e.preventDefault();
@@ -1726,8 +1729,213 @@ async function loadEbrf(file){
   }
 }
 
-/** BRF / BRL 파일 여부 판별 헬퍼 */
-function isBrf(){ return docType==='brf'||docType==='brl'||docType==='ebrf'; }
+/** BRF / BRL / eBraille 파일 여부 판별 헬퍼 */
+function isBrf(){ return docType==='brf'||docType==='brl'||docType==='ebrf'||docType==='ebrl'; }
+
+/**
+ * eBraille 유니코드 점자 텍스트 → 300셀 페이지 배열
+ * 규격: DAISY eBraille 1.0 (https://daisy.org/activities/standards/ebraille/)
+ * 인코딩: U+2800-U+28FF (각 코드포인트 - 0x2800 = 8점 비트마스크)
+ *   - U+0020 / U+00A0 : 빈 셀(0x00)
+ *   - U+000A (LF)     : 행 끝까지 패딩 후 다음 행으로
+ */
+function parseEbrlToCellPages(text){
+  const PAGE=CELLS_GRAPHIC; // 300
+  const ROW =CELLS_PER_LINE; // 30
+
+  const allCells=[];
+  let col=0;
+
+  for(let i=0;i<text.length;i++){
+    const code=text.charCodeAt(i);
+
+    if(code>=0x2800 && code<=0x28FF){
+      // 유니코드 점자 → dot bitmask (8점)
+      allCells.push(code-0x2800);
+      if(++col>=ROW) col=0; // 30셀 자동 줄바꿈
+    } else if(code===0x0020||code===0x00A0){
+      // 공백(SPACE / NBSP) → 빈 셀
+      allCells.push(0);
+      if(++col>=ROW) col=0;
+    } else if(code===0x000A){
+      // LF → 현재 행 끝까지 0 패딩 (줄 맞춤)
+      if(col>0){
+        for(let j=col;j<ROW;j++) allCells.push(0);
+        col=0;
+      }
+    }
+    // CR / 기타 제어문자 무시
+  }
+
+  // 뒤쪽 빈 셀 트림 + 행 경계 정렬
+  let trimEnd=allCells.length;
+  while(trimEnd>0 && allCells[trimEnd-1]===0) trimEnd--;
+  if(trimEnd%ROW!==0) trimEnd=Math.ceil(trimEnd/ROW)*ROW;
+  if(trimEnd===0) return [new Uint8Array(PAGE)];
+
+  // 300셀 단위 페이지 분할
+  const pages=[];
+  for(let s=0;s<trimEnd;s+=PAGE){
+    const cells=new Uint8Array(PAGE);
+    for(let j=0;j<PAGE&&s+j<trimEnd;j++) cells[j]=allCells[s+j];
+    pages.push(cells);
+  }
+  return pages.length>0?pages:[new Uint8Array(PAGE)];
+}
+
+/**
+ * DAISY eBraille 1.0 로더 (.ebrl)
+ * 포맷: OCF ZIP 컨테이너, package.opf + XHTML 콘텐츠, 유니코드 점자
+ * 스펙: https://daisy.org/s/ebraille/1.0/FINAL-ebraille-20250814/
+ */
+async function loadEbrl(file){
+  showPdfLoading(`${file.name} 불러오는 중...`);
+  try{
+    if(typeof JSZip==='undefined'){
+      hidePdfLoading();
+      addLog('err','JSZip 라이브러리가 로드되지 않았습니다 (네트워크 확인)');
+      return;
+    }
+
+    // ── 1. ZIP 압축 해제 ──────────────────────────────────────────
+    const buf=await file.arrayBuffer();
+    const zip=await JSZip.loadAsync(buf);
+
+    // ── 2. package.opf 위치 결정 ─────────────────────────────────
+    // 스펙: publication root에 package.opf REQUIRED
+    // EPUB 3 호환: META-INF/container.xml에서 rootfile 경로 참조 가능
+    let opfPath='package.opf';
+    const containerFile=zip.file('META-INF/container.xml');
+    if(containerFile){
+      const cXml=await containerFile.async('text');
+      const cDoc=new DOMParser().parseFromString(cXml,'application/xml');
+      const rf=cDoc.querySelector('rootfile[full-path]');
+      if(rf) opfPath=rf.getAttribute('full-path');
+    }
+
+    const opfFile=zip.file(opfPath);
+    if(!opfFile){
+      hidePdfLoading();
+      addLog('err',`eBraille: package.opf(${opfPath})을 찾을 수 없습니다`);
+      return;
+    }
+
+    // ── 3. OPF 파싱 ──────────────────────────────────────────────
+    const opfText=await opfFile.async('text');
+    const opfDoc=new DOMParser().parseFromString(opfText,'application/xml');
+    const DC ='http://purl.org/dc/elements/1.1/';
+    const OPF='http://www.idpf.org/2007/opf';
+
+    // 메타데이터
+    const title   =opfDoc.getElementsByTagNameNS(DC,'title')[0]?.textContent.trim()||file.name;
+    const creators=[...opfDoc.getElementsByTagNameNS(DC,'creator')].map(e=>e.textContent.trim()).join(', ');
+    const langRaw =opfDoc.getElementsByTagNameNS(DC,'language')[0]?.textContent.trim()||'en';
+    const brailleSystem=opfDoc.querySelector('meta[property="a11y\\:brailleSystem"]')?.textContent.trim()||
+                        opfDoc.querySelector('[property="a11y:brailleSystem"]')?.textContent.trim()||'';
+    const cellType=opfDoc.querySelector('meta[property="a11y\\:brailleCellType"]')?.textContent.trim()||
+                   opfDoc.querySelector('[property="a11y:brailleCellType"]')?.textContent.trim()||'6';
+
+    // ── 4. Manifest 아이템 맵 ─────────────────────────────────────
+    const manifest=opfDoc.getElementsByTagNameNS(OPF,'manifest')[0];
+    const itemMap={}; // id → href
+    if(manifest){
+      for(const item of manifest.getElementsByTagNameNS(OPF,'item')){
+        itemMap[item.getAttribute('id')]=item.getAttribute('href');
+      }
+    }
+
+    // ── 5. Spine 순서대로 콘텐츠 파일 목록 ───────────────────────
+    const spine=opfDoc.getElementsByTagNameNS(OPF,'spine')[0];
+    const spineHrefs=[];
+    if(spine){
+      for(const ref of spine.getElementsByTagNameNS(OPF,'itemref')){
+        if(ref.getAttribute('linear')==='no') continue; // 비선형 항목 건너뜀
+        const id=ref.getAttribute('idref');
+        if(itemMap[id]) spineHrefs.push(itemMap[id]);
+      }
+    }
+    if(!spineHrefs.length){
+      hidePdfLoading();
+      addLog('err','eBraille: spine에 콘텐츠 항목이 없습니다');
+      return;
+    }
+
+    // ── 6. XHTML 콘텐츠 문서에서 유니코드 점자 추출 ──────────────
+    // opfPath가 하위 디렉터리에 있는 경우 기준 경로 계산
+    const opfDir=opfPath.includes('/')?opfPath.slice(0,opfPath.lastIndexOf('/')+1):'';
+    let allBrailleText='';
+
+    for(const href of spineHrefs){
+      // 상대 경로 해석: opfPath 기준
+      const fullPath=opfDir+href;
+      const cf=zip.file(fullPath)||zip.file(href); // fallback: root 기준
+      if(!cf){ addLog('warn',`eBraille: ${fullPath} 를 찾을 수 없어 건너뜁니다`); continue; }
+
+      const xhtml=await cf.async('text');
+      const xDoc=new DOMParser().parseFromString(xhtml,'application/xhtml+xml');
+      const body=xDoc.body||xDoc.documentElement;
+      const raw=body.textContent;
+
+      // 스펙 §6.2.1 허용 문자만 추출
+      let filtered='';
+      for(let i=0;i<raw.length;i++){
+        const c=raw.charCodeAt(i);
+        if(c>=0x2800&&c<=0x28FF) filtered+=raw[i];       // 점자 셀
+        else if(c===0x000A)      filtered+='\n';          // LF → 줄바꿈
+        else if(c===0x0020||c===0x00A0) filtered+=' ';   // 공백 셀
+        // 0x0009(TAB), 0x000D(CR), 0x00AD(SOFT HYPHEN) 무시
+      }
+      allBrailleText+=filtered+'\n'; // 콘텐츠 문서 간 행 구분
+    }
+
+    // ── 7. 300셀 페이지 분할 ─────────────────────────────────────
+    const cellPages=parseEbrlToCellPages(allBrailleText);
+    if(!cellPages.length){
+      hidePdfLoading();
+      addLog('err','eBraille: 추출된 점자 콘텐츠가 없습니다');
+      return;
+    }
+
+    // ── 8. 전역 상태 초기화 ───────────────────────────────────────
+    cancelSend();
+    docType='ebrl';
+    pdfDoc=null;
+    pdfTotalPages=cellPages.length;
+    pdfCurrentPage=1;
+    pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
+    pdfMode=true;
+    // 언어: BCP 47 태그 'ko-Brai' 등 → 앞 2글자로 판단
+    pdfLang=langRaw.toLowerCase().startsWith('ko')?'ko':'en';
+    _brfHintsCache.clear();
+    const sel=document.getElementById('pdfLangSelect');
+    if(sel) sel.value=pdfLang;
+
+    // ── 9. 페이지 캐시 구성 ───────────────────────────────────────
+    cellPages.forEach((cells,i)=>{
+      const pn=i+1;
+      pdfPageDots[pn]=cells;
+      pdfPageHasImg[pn]=true;
+      pdfPageTexts[pn]=brfCellsToUnicodePreview(cells);
+    });
+
+    // ── 10. UI 업데이트 ───────────────────────────────────────────
+    const metaLine=[creators,brailleSystem].filter(Boolean).join(' · ');
+    document.getElementById('pdfFilename').textContent=`⠿ ${title}`;
+    document.getElementById('pdfMeta').textContent=
+      `총 ${pdfTotalPages}페이지 · ${cellType}점 · eBraille 1.0${metaLine?` (${metaLine})`:'' }`;
+    hidePdfLoading();
+    document.getElementById('dropZoneWrap').style.display='none';
+    document.getElementById('pdfLoadedWrap').style.display='block';
+    document.getElementById('dualBadge').style.display='flex';
+
+    addLog('ok',`✓ eBraille 1.0 로드: ${title} → ${pdfTotalPages}p · ${cellType}점 · ${brailleSystem||pdfLang}`);
+    displayPdfPage(1);
+
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`eBraille 로드 실패: ${e.message}`);
+  }
+}
 
 function closePdf(){
   cancelSend();
@@ -2274,7 +2482,7 @@ function updateViewModeBadge(hasImg){
     // BRF/BRL: 전용 배지 (뷰 전환 없음)
     badge.className='view-mode-badge graphic';
     icon.textContent='⠿';
-    label.textContent=docType.toUpperCase()+' 점자';
+    label.textContent=(docType==='ebrl'?'eBraille 1.0':docType.toUpperCase())+' 점자';
     hint.textContent='패닝키 ◀▶ 로 페이지 이동';
   } else if(pdfViewMode==='graphic'){
     badge.className='view-mode-badge graphic';
