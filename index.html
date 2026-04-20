@@ -407,7 +407,7 @@ textarea::placeholder{color:#c8c6bc;}
   <div id="dropZoneWrap">
     <div class="drop-zone" id="dropZone"
       ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
-      <input type="file" accept=".pdf,.docx,.doc,.txt,.brf,.brl" onchange="onFileSelect(event)">
+      <input type="file" accept=".pdf,.docx,.doc,.txt,.brf,.brl,.ebrf" onchange="onFileSelect(event)">
       <div class="drop-icon">📂</div>
       <div class="drop-title">파일을 여기에 드래그하거나 클릭</div>
       <div class="drop-sub" style="margin-bottom:10px;">점자로 변환하여 닷패드에 출력합니다</div>
@@ -890,7 +890,7 @@ let pdfDoc=null, pdfLang='ko';
 let pdfCurrentPage=1, pdfTotalPages=0;
 let pdfPageTexts={};      // {pageNum: string}         텍스트 캐시
 let pdfOrigFullText='';   // TXT/DOCX 원본 전문 (언어 변경 시 재분할에 사용) — BUG-07 fix
-let docType='none';       // 'pdf'|'docx'|'txt'|'brf'|'brl' — 현재 로드된 파일 타입
+let docType='none';       // 'pdf'|'docx'|'txt'|'brf'|'brl'|'ebrf' — 현재 로드된 파일 타입
 let pdfPageDots={};       // {pageNum: Uint8Array(300)} 이미지→도트 캐시
 let pdfPageHasImg={};     // {pageNum: boolean}         이미지 포함 여부 캐시
 let pdfMode=false;
@@ -1339,7 +1339,8 @@ function routeFileLoad(file){
   else if(name.endsWith('.docx')||name.endsWith('.doc')) loadDocx(file);
   else if(name.endsWith('.txt')) loadTxt(file);
   else if(name.endsWith('.brf')||name.endsWith('.brl')) loadBrf(file);
-  else addLog('err',`지원하지 않는 형식입니다 — PDF, DOCX, TXT, BRF, BRL만 가능`);
+  else if(name.endsWith('.ebrf')) loadEbrf(file);
+  else addLog('err',`지원하지 않는 형식입니다 — PDF, DOCX, TXT, BRF, BRL, EBRF만 가능`);
 }
 function onDrop(e){
   e.preventDefault();
@@ -1627,8 +1628,106 @@ async function loadBrf(file){
   }
 }
 
+/** DAISY EBRF (.ebrf) 로더 — XML 파싱 후 BRF 콘텐츠 추출 */
+async function loadEbrf(file){
+  showPdfLoading(`${file.name} 불러오는 중...`);
+  try{
+    const xmlText=await file.text();
+    if(!xmlText.trim()){hidePdfLoading();addLog('err','EBRF 파일이 비어 있습니다');return;}
+
+    // XML 파싱
+    const parser=new DOMParser();
+    const doc=parser.parseFromString(xmlText,'application/xml');
+    const parseErr=doc.querySelector('parsererror');
+    if(parseErr){
+      hidePdfLoading();
+      addLog('err',`EBRF XML 파싱 오류: ${parseErr.textContent.slice(0,120)}`);
+      return;
+    }
+
+    // 메타데이터 추출 (Dublin Core)
+    const getMeta=name=>{
+      const el=doc.querySelector(`[*|name="${name}"], meta[name="${name}"], ${name}`);
+      return el?el.textContent.trim():'';
+    };
+    const title  = doc.querySelector('meta[name="dc:title"], title, dc\\:title')?.textContent.trim()
+                || doc.querySelector('title')?.textContent.trim()
+                || file.name;
+    const author = doc.querySelector('meta[name="dc:creator"], dc\\:creator')?.textContent.trim()||'';
+    const lang   = doc.querySelector('meta[name="dc:language"], dc\\:language')?.textContent.trim()||'en';
+
+    // BRF 콘텐츠 추출
+    // DAISY EBRF 표준: <body> 또는 <braille> 또는 <brl> 요소 내 텍스트
+    // 또는 <section>/<p> 요소들의 텍스트 노드를 순서대로 결합
+    let brfContent='';
+    const brailleEl = doc.querySelector('braille, brl, body');
+    if(brailleEl){
+      // 텍스트 노드만 추출 (태그 제거), CDATA 포함
+      brfContent=brailleEl.textContent;
+    }
+    if(!brfContent.trim()){
+      // fallback: 전체 문서 textContent
+      brfContent=doc.documentElement.textContent;
+    }
+    if(!brfContent.trim()){
+      hidePdfLoading();
+      addLog('err','EBRF에서 점자 콘텐츠를 찾을 수 없습니다');
+      return;
+    }
+
+    const cellPages=parseBrfToCellPages(brfContent);
+    if(!cellPages.length){
+      hidePdfLoading();
+      addLog('err','EBRF 점자 데이터가 없습니다 (빈 콘텐츠)');
+      return;
+    }
+
+    // 전역 상태 초기화
+    cancelSend();
+    docType='ebrf';
+    pdfDoc=null;
+    pdfTotalPages=cellPages.length;
+    pdfCurrentPage=1;
+    pdfPageTexts={};
+    pdfPageDots={};
+    pdfPageHasImg={};
+    pdfPageIsOcr={};
+    pdfMode=true;
+    // EBRF는 대부분 영어 점자 — 언어 코드에서 'ko' 감지 시 한국어로 설정
+    pdfLang=lang.toLowerCase().startsWith('ko')?'ko':'en';
+    _brfHintsCache.clear();
+    const pdfLangSel=document.getElementById('pdfLangSelect');
+    if(pdfLangSel) pdfLangSel.value=pdfLang;
+
+    // 페이지 캐시 구성
+    cellPages.forEach((cells,i)=>{
+      const pn=i+1;
+      pdfPageDots[pn]=cells;
+      pdfPageHasImg[pn]=true;
+      pdfPageTexts[pn]=brfCellsToUnicodePreview(cells);
+    });
+
+    // 표시 이름: 메타 타이틀 우선
+    const displayName=title!==file.name ? `${title}` : file.name;
+    const metaExtra=author ? ` · 저자: ${author}` : '';
+    document.getElementById('pdfFilename').textContent=`⠿ ${displayName}`;
+    document.getElementById('pdfMeta').textContent=
+      `총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀${metaExtra}`;
+    hidePdfLoading();
+    document.getElementById('dropZoneWrap').style.display='none';
+    document.getElementById('pdfLoadedWrap').style.display='block';
+    document.getElementById('dualBadge').style.display='flex';
+
+    addLog('ok',`✓ EBRF 로드: ${displayName} → ${pdfTotalPages}p (언어: ${pdfLang})`);
+    displayPdfPage(1);
+  }catch(e){
+    hidePdfLoading();
+    addLog('err',`EBRF 로드 실패: ${e.message}`);
+  }
+}
+
 /** BRF / BRL 파일 여부 판별 헬퍼 */
-function isBrf(){ return docType==='brf'||docType==='brl'; }
+function isBrf(){ return docType==='brf'||docType==='brl'||docType==='ebrf'; }
 
 function closePdf(){
   cancelSend();
