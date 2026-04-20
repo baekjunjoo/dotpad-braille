@@ -698,6 +698,8 @@ const KO_PUNCT={
   '\u300B':[54,32],      // 》 겹화살괄호 닫기 ⠶⠠ ★제49항 신설
   '\uFF08':[38],         // （ 전각소괄호 열기
   '\uFF09':[52],         // ） 전각소괄호 닫기
+  '\u3003':[16,16],      // 〃 상동기호     ⠐⠐ (dots 5 × 2)    ★제62항 2024개정
+  '\u301E':[16,16],      // 〞 이중 쌍따옴표 상동기호 변형
 };
 
 // ── 단독 자모 (U+3131~U+3163) → 점자 셀 배열 ─────────────────────
@@ -887,6 +889,7 @@ let autoTimer=null, autoEnabled=false;
 let pdfDoc=null, pdfLang='ko';
 let pdfCurrentPage=1, pdfTotalPages=0;
 let pdfPageTexts={};      // {pageNum: string}         텍스트 캐시
+let pdfOrigFullText='';   // TXT/DOCX 원본 전문 (언어 변경 시 재분할에 사용) — BUG-07 fix
 let docType='none';       // 'pdf'|'docx'|'txt'|'brf'|'brl' — 현재 로드된 파일 타입
 let pdfPageDots={};       // {pageNum: Uint8Array(300)} 이미지→도트 캐시
 let pdfPageHasImg={};     // {pageNum: boolean}         이미지 포함 여부 캐시
@@ -1381,12 +1384,15 @@ function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
 /** TXT/DOCX 공통 가상 문서 설정
  * pages 항목: 문자열(텍스트 페이지) 또는 {type:'image', dots:Uint8Array(300)}(이미지 페이지)
  */
-function setupVirtualDoc(filename, pages, type){
+function setupVirtualDoc(filename, pages, type, origText=''){
   docType=type;
   pdfDoc=null;            // PDF.js 객체 없음
   pdfTotalPages=pages.length;
   pdfCurrentPage=1;
   pdfPageTexts={};
+  // BUG-07 fix: 원본 전문 저장 (언어 변경 시 재분할에 사용)
+  // origText가 전달된 경우 직접 사용, 없으면 텍스트 페이지를 연결해 복원
+  pdfOrigFullText=origText || pages.filter(p=>typeof p==='string').join('\n\n');
   pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
   pdfPageSubTexts={}; pdfCurrentSubPage=0; // BUG-03 fix: 서브페이지 캐시 초기화
   pages.forEach((p,i)=>{
@@ -1423,7 +1429,7 @@ async function loadTxt(file){
     const text=await file.text();
     if(!text.trim()){hidePdfLoading();addLog('err','TXT 파일이 비어 있습니다');return;}
     const pages=splitTextToPages(text, pdfLang);
-    setupVirtualDoc(file.name, pages, 'txt');
+    setupVirtualDoc(file.name, pages, 'txt', text); // BUG-07 fix: 원본 전달
   }catch(e){
     hidePdfLoading();
     addLog('err',`TXT 오류: ${e.message}`);
@@ -1438,9 +1444,10 @@ async function loadDocx(file){
     const arrayBuffer=await file.arrayBuffer();
 
     // ── [Step 1] 텍스트 추출 + HTML 변환(이미지 포함) 병렬 수행 ──
+    // RISK-06 fix: 동일 ArrayBuffer를 두 함수에 동시 전달 시 오염 방지 → slice(0) 복사본 사용
     const [textResult, htmlResult]=await Promise.all([
       mammoth.extractRawText({arrayBuffer}),
-      mammoth.convertToHtml({arrayBuffer})
+      mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)})
     ]);
     let text=textResult.value.trim();
 
@@ -1482,7 +1489,7 @@ async function loadDocx(file){
     const textPages=text?splitTextToPages(text,pdfLang):[];
     const allPages=[...imagePages,...textPages];
 
-    setupVirtualDoc(file.name, allPages, 'docx');
+    setupVirtualDoc(file.name, allPages, 'docx', text); // BUG-07 fix: 원본 텍스트 전달
   }catch(e){
     hidePdfLoading();
     addLog('err',`DOCX 오류: ${e.message}`);
@@ -1627,6 +1634,7 @@ function closePdf(){
   cancelSend();
   const prevType=docType;
   pdfDoc=null; pdfMode=false; docType='none';
+  pdfOrigFullText=''; // BUG-07 fix: 원본 텍스트 초기화
   pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
   pdfPageSubTexts={}; pdfPageIsOcr={}; pdfCurrentSubPage=0;
   pdfViewMode='graphic'; // BUG-04 fix: 뷰 모드 초기화 (다음 파일 로드 시 기본값)
@@ -2132,11 +2140,17 @@ function setPdfLang(l){
   if(docType==='txt'||docType==='docx'){
     // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
     addLog('info',`언어 변경 → 페이지 재분할 중...`);
-    // 원문 텍스트 복원 후 재분할 — 숫자 키 오름차순 보장
-    const fullText=Object.keys(pdfPageTexts).map(Number).sort((a,b)=>a-b).map(k=>pdfPageTexts[k]).join('\n\n');
+    // BUG-07 fix: pdfOrigFullText(원본 전문) 우선 사용 → 없으면 기존 방식 fallback
+    const fullText=pdfOrigFullText ||
+      Object.keys(pdfPageTexts).map(Number).sort((a,b)=>a-b).map(k=>pdfPageTexts[k]).join('\n\n');
     const pages=splitTextToPages(fullText, l);
-    pages.forEach((p,i)=>{pdfPageTexts[i+1]=p;});
-    pdfTotalPages=pages.length;
+    // 텍스트 페이지만 교체 (이미지 페이지 pdfPageDots는 그대로 유지)
+    const imageCount=Object.keys(pdfPageDots).length; // 이미지 페이지 수 (변경 없음)
+    const firstTextKey=imageCount+1; // 텍스트 페이지 시작 번호
+    // 기존 텍스트 페이지 키(빈 문자열 포함) 삭제 → 이미지 키는 건드리지 않음
+    for(let k=firstTextKey;k<=pdfTotalPages;k++) delete pdfPageTexts[k];
+    pages.forEach((p,i)=>{pdfPageTexts[firstTextKey+i]=p;});
+    pdfTotalPages=imageCount+pages.length;
     pdfPageSubTexts={}; pdfCurrentSubPage=0;
     document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지 (가상 페이지 분할)`;
     displayPdfPage(1, 0);
