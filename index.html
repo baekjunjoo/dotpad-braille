@@ -664,9 +664,84 @@ const KO_G2_WORD_MAP=[
   ['것이다','것다'],  ['수있다','있다'],
 ];
 
-const CHOSEONG=[[8],[8,8],[9],[10],[10,10],[11],[17],[24],[24,24],[16],[16,16],[],[19],[19,19],[27],[40],[48],[56],[58]];
-const JUNGSEONG=[[35],[43],[28],[28,43],[39],[47],[60],[60,43],[37],[37,35],[37,43],[37,61],[53],[38],[38,39],[38,47],[38,61],[54],[30],[30,61],[61]];
-const JONGSEONG=[[],[8],[8,8],[8,16],[9],[9,19],[9,58],[10],[11],[11,8],[11,17],[11,24],[11,16],[11,48],[11,56],[11,58],[17],[24],[24,16],[16],[16,16],[62],[19],[27],[40],[48],[56],[58]];
+// ── 한국 점자 규정 기준 자모 점형 테이블 (braillify v1.0.10 검증 완료) ──────
+// 2025-04: 기존 배열 58/68 오류 → braillify(Apache-2.0) 출력값으로 전면 교정
+// 인덱스 = 유니코드 한글 자모 순서
+// 된소리표 = ⠠(dot6) = 32, 2항 규정: 된소리 = 된소리표 + 평음 초성
+const CHOSEONG=[
+  [8],       // ㄱ  ⠈
+  [32,8],    // ㄲ  ⠠⠈  (된소리표+ㄱ) — 구 [8,8] 오류
+  [9],       // ㄴ  ⠉
+  [10],      // ㄷ  ⠊
+  [32,10],   // ㄸ  ⠠⠊  (된소리표+ㄷ) — 구 [10,10] 오류
+  [16],      // ㄹ  ⠐   — 구 [11] 오류
+  [17],      // ㅁ  ⠑
+  [24],      // ㅂ  ⠘
+  [32,24],   // ㅃ  ⠠⠘  (된소리표+ㅂ) — 구 [24,24] 오류
+  [32],      // ㅅ  ⠠   — 구 [16] 오류
+  [32,32],   // ㅆ  ⠠⠠  (된소리표+ㅅ) — 구 [16,16] 오류
+  [],        // ㅇ  (무점)
+  [40],      // ㅈ  ⠨   — 구 [19] 오류
+  [32,40],   // ㅉ  ⠠⠨  (된소리표+ㅈ) — 구 [19,19] 오류
+  [48],      // ㅊ  ⠰   — 구 [27] 오류
+  [11],      // ㅋ  ⠋   — 구 [40] 오류
+  [19],      // ㅌ  ⠓   — 구 [48] 오류
+  [25],      // ㅍ  ⠙   — 구 [56] 오류
+  [26],      // ㅎ  ⠚   — 구 [58] 오류
+];
+const JUNGSEONG=[
+  [35],      // ㅏ  ⠣
+  [23],      // ㅐ  ⠗   — 구 [43] 오류
+  [28],      // ㅑ  ⠜
+  [28,23],   // ㅒ  ⠜⠗  — 구 [28,43] 오류
+  [14],      // ㅓ  ⠎   — 구 [39] 오류
+  [29],      // ㅔ  ⠝   — 구 [47] 오류
+  [49],      // ㅕ  ⠱   — 구 [60] 오류
+  [12],      // ㅖ  ⠌   — 구 [60,43] 오류
+  [37],      // ㅗ  ⠥
+  [39],      // ㅘ  ⠧   — 구 [37,35] 오류
+  [39,23],   // ㅙ  ⠧⠗  — 구 [37,43] 오류
+  [61],      // ㅚ  ⠽   — 구 [37,61] 오류 (⠥⠽→⠽)
+  [44],      // ㅛ  ⠬   — 구 [53] 오류
+  [13],      // ㅜ  ⠍   — 구 [38] 오류
+  [15],      // ㅝ  ⠏   — 구 [38,39] 오류
+  [15,23],   // ㅞ  ⠏⠗  — 구 [38,47] 오류
+  [13,23],   // ㅟ  ⠍⠗  — 구 [38,61] 오류
+  [41],      // ㅠ  ⠩   — 구 [54] 오류
+  [42],      // ㅡ  ⠪   — 구 [30] 오류
+  [58],      // ㅢ  ⠺   — 구 [30,61] 오류
+  [21],      // ㅣ  ⠕   — 구 [61] 오류
+];
+const JONGSEONG=[
+  [],        // (없음)
+  [1],       // ㄱ  ⠁   — 구 [8] 오류
+  [1,1],     // ㄲ  ⠁⠁  — 구 [8,8] 오류
+  [1,4],     // ㄳ  ⠁⠄  — 구 [8,16] 오류
+  [18],      // ㄴ  ⠒   — 구 [9] 오류
+  [18,5],    // ㄵ  ⠒⠅  — 구 [9,19] 오류
+  [18,52],   // ㄶ  ⠒⠼  — 구 [9,58] 오류
+  [20],      // ㄷ  ⠔   — 구 [10] 오류
+  [2],       // ㄹ  ⠂   — 구 [11] 오류
+  [2,1],     // ㄺ  ⠂⠁  — 구 [11,8] 오류
+  [2,34],    // ㄻ  ⠂⠢  — 구 [11,17] 오류
+  [2,3],     // ㄼ  ⠂⠃  — 구 [11,24] 오류
+  [2,4],     // ㄽ  ⠂⠄  — 구 [11,16] 오류
+  [2,38],    // ㄾ  ⠂⠦  — 구 [11,48] 오류
+  [2,50],    // ㄿ  ⠂⠲  — 구 [11,56] 오류
+  [2,52],    // ㅀ  ⠂⠼  — 구 [11,58] 오류
+  [34],      // ㅁ  ⠢   — 구 [17] 오류
+  [3],       // ㅂ  ⠃   — 구 [24] 오류
+  [3,4],     // ㅄ  ⠃⠄  — 구 [24,16] 오류
+  [4],       // ㅅ  ⠄   — 구 [16] 오류
+  [12],      // ㅆ  ⠌   — 구 [16,16] 오류
+  [54],      // ㅇ  ⠶   — 구 [62] 오류
+  [5],       // ㅈ  ⠅   — 구 [19] 오류
+  [6],       // ㅊ  ⠆   — 구 [27] 오류
+  [22],      // ㅋ  ⠖   — 구 [40] 오류
+  [38],      // ㅌ  ⠦   — 구 [48] 오류
+  [50],      // ㅍ  ⠲   — 구 [56] 오류
+  [52],      // ㅎ  ⠼   — 구 [58] 오류
+];
 
 // ── 한국어 문장부호 점자 테이블 (국립국어원 2024 한국 점자 규정) ────
 // 값: 6점 bitmask 배열 (셀이 여러 개면 다셀 부호)
@@ -792,6 +867,86 @@ let lang='ko', dispMode='text', allCells=[], allGraphicCells=[], dotpadPage=0;
 let grade=1; // 1=Grade1(완전풀기), 2=Grade2(약자)
 
 // ============================================================
+// braillify — 한국어 primary 점역 엔진 (Rust/WASM, Apache-2.0)
+// https://github.com/dev-five-git/braillify
+// encode(text): Uint8Array — 각 바이트가 6점 dot bitmask (charCode-0x2800과 동일)
+// translateToUnicode(text): string — 유니코드 점자 문자열
+// ============================================================
+let braillifyReady=false;
+let _braillifyWasm=null; // WebAssembly instance exports
+
+async function initBraillify(){
+  const WASM_URL='https://cdn.jsdelivr.net/npm/braillify@1.0.10/pkg/index_bg.wasm';
+  try{
+    const resp=await fetch(WASM_URL);
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf=await resp.arrayBuffer();
+
+    // wasm-pack 빌드 헬퍼 (index_bg.js 내용을 인라인 재현)
+    let _mem=null;
+    const getMem=()=>{ if(!_mem||_mem.byteLength===0) _mem=new Uint8Array(_braillifyWasm.memory.buffer); return _mem; };
+    const _dec=new TextDecoder('utf-8',{ignoreBOM:true,fatal:true});
+    const _enc=new TextEncoder();
+    const _gs=(p,l)=>_dec.decode(getMem().subarray(p>>>0,(p>>>0)+l));
+    let _vl=0;
+    const _ps=(s,m)=>{ const b=_enc.encode(s),p=m(b.length,1)>>>0; getMem().subarray(p,p+b.length).set(b); _vl=b.length; return p; };
+    const _tf=(i)=>{ const v=_braillifyWasm.__wbindgen_externrefs.get(i); _braillifyWasm.__externref_table_dealloc(i); return v; };
+
+    const imports={
+      './index_bg.js':{
+        __wbindgen_init_externref_table:()=>{
+          const t=_braillifyWasm.__wbindgen_externrefs; const o=t.grow(4);
+          t.set(0,undefined); t.set(o,undefined); t.set(o+1,null); t.set(o+2,true); t.set(o+3,false);
+        },
+        __wbindgen_cast_2241b6af4c4b2941:(a,b)=>_gs(a,b),
+      }
+    };
+    const mod=await WebAssembly.compile(buf);
+    const inst=await WebAssembly.instantiate(mod,imports);
+    _braillifyWasm=inst.exports;
+    _braillifyWasm.__wbindgen_start();
+
+    // API 함수 노출
+    window._braillifyEncode=(text)=>{
+      const p=_ps(text,_braillifyWasm.__wbindgen_malloc),l=_vl;
+      const r=_braillifyWasm.encode(p,l);
+      if(r[3]) throw _tf(r[2]);
+      const out=getMem().subarray(r[0]>>>0,(r[0]>>>0)+r[1]).slice();
+      _braillifyWasm.__wbindgen_free(r[0],r[1],1);
+      return out;
+    };
+    window._braillifyUnicode=(text)=>{
+      const p=_ps(text,_braillifyWasm.__wbindgen_malloc),l=_vl;
+      const r=_braillifyWasm.translateToUnicode(p,l);
+      const p2=r[0],l2=r[1];
+      if(r[3]){ _braillifyWasm.__wbindgen_free(p2,l2,1); throw _tf(r[2]); }
+      const s=_gs(p2,l2); _braillifyWasm.__wbindgen_free(p2,l2,1); return s;
+    };
+
+    braillifyReady=true;
+    console.log('[braillify] ✓ 초기화 완료 (1.0.10, Rust/WASM)');
+    updateLouisStatusBadge(louisReady); // 뱃지 갱신 (둘 다 표시)
+    onTextInput(); // 준비 완료 → 즉시 재변환
+  }catch(e){
+    console.warn('[braillify] 초기화 실패:', e.message);
+  }
+}
+
+/** braillify로 한국어 점역 — 결과: number[] (dot bitmask 배열) */
+function braillifyTranslate(text){
+  if(!braillifyReady) return null;
+  try{
+    // 상동기호 〃(U+3003) 등 braillify 크래시 문자 사전 필터링
+    const safe=text.replace(/[\u3003\u301E]/g,''); // 직접 처리 → KO_PUNCT fallback
+    const cells=window._braillifyEncode(safe);
+    return Array.from(cells);
+  }catch(e){
+    console.warn('[braillify] encode 오류:',e.message);
+    return null;
+  }
+}
+
+// ============================================================
 // LibLouis 점역 엔진
 // ============================================================
 let louisReady=false;
@@ -829,7 +984,7 @@ async function initLibLouis(){
     if(test && test.length>0){
       louisReady=true;
       console.log('[LibLouis] ✓ 초기화 완료, 버전:',liblouis.version());
-      updateLouisStatusBadge(true);
+      updateLouisStatusBadge(louisReady);
       // langInfo "로딩 중" 메시지 제거 + 재변환
       setLang(lang);
       if(pdfMode) setPdfLang(pdfLang);
@@ -860,19 +1015,26 @@ function louisTextToCells(text, language, g){
   }
 }
 
-/** LibLouis 상태 배지 UI 업데이트 */
+/** 점역 엔진 상태 배지 UI 업데이트 (braillify + LibLouis 통합 표시) */
 function updateLouisStatusBadge(ready){
   const el=document.getElementById('louisStatusBadge');
   if(!el) return;
   const dot=el.querySelector('.live-dot');
   const txt=el.querySelector('.badge-text');
-  if(ready){
-    if(dot){dot.style.background='#788c5d';}
-    if(txt) txt.textContent='⠿ LibLouis ON';
+  // braillify(한국어) + LibLouis(영어/역점역) 상태 종합
+  const bothOn=braillifyReady&&louisReady;
+  const anyOn =braillifyReady||louisReady;
+  if(bothOn){
+    if(dot) dot.style.background='#788c5d';
+    if(txt) txt.textContent='⠿ 점역엔진 최적';
+    el.classList.add('active');
+  }else if(anyOn){
+    if(dot) dot.style.background='#d97757';
+    if(txt) txt.textContent=braillifyReady?'⠿ braillify ON':'⠿ LibLouis ON';
     el.classList.add('active');
   }else{
-    if(dot){dot.style.background='#d0cec4';}
-    if(txt) txt.textContent='⠿ LibLouis OFF';
+    if(dot) dot.style.background='#d0cec4';
+    if(txt) txt.textContent='⠿ 엔진 로딩 중';
     el.classList.remove('active');
   }
 }
@@ -1309,7 +1471,13 @@ const _CELL_CACHE_MAX=200;  // 최대 항목 수 (LRU-lite: 초과 시 가장 �
 const _brfHintsCache=new Map(); // BRF 역번역 힌트 캐시 (key: "pageNum:lang:grade")
 
 function textToCells(text, language){
-  // LibLouis 우선 — 초기화 완료 & 해당 언어 테이블 존재 시
+  // ① braillify 우선 — 한국어 & 초기화 완료 시 (Grade 1/2 모두)
+  //    상동기호 등 braillify 미지원 문자가 포함되면 LibLouis/내장 fallback
+  if(braillifyReady && text && language==='ko'){
+    const cells=braillifyTranslate(text);
+    if(cells!==null) return cells;
+  }
+  // ② LibLouis — 영어/다국어 & 초기화 완료 시
   if(louisReady && text && LOUIS_TABLES[language]){
     const cells=louisTextToCells(text, language, grade); // 전역 grade 직접 사용
     if(cells!==null) return cells;
@@ -3209,7 +3377,9 @@ window.onload=()=>{
   renderBothPreviews([], []);
   document.getElementById('textInput').value=LANG_META[lang]?.greeting||'안녕하세요';
   onTextInput();
-  // LibLouis 비동기 초기화 (백그라운드)
+  // braillify 비동기 초기화 (한국어 primary 엔진, 백그라운드)
+  initBraillify().catch(e=>console.warn('[braillify] 초기화 실패:',e));
+  // LibLouis 비동기 초기화 (영어/다국어 + 역점역 엔진, 백그라운드)
   initLibLouis().catch(e=>console.warn('[LibLouis] 초기화 실패:',e));
 };
 </script>
