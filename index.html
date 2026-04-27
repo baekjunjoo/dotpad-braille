@@ -661,7 +661,7 @@ const KO_G2_WORD_MAP=[
   ['이러한','이한'],  ['저러한','저한'],
   ['합니다','한다'],  ['됩니다','된다'],  ['입니다','이다'],
   ['되었다','됐다'],  ['하였다','했다'],
-  ['것이다','것다'],  ['수있다','있다'],
+  ['것이다','것다'],  // fix: '수있다' 제거 — 실제 입력에 항상 공백('수 있다')이 있어 매칭 불가
 ];
 
 // ── 한국 점자 규정 기준 자모 점형 테이블 (braillify v1.0.10 검증 완료) ──────
@@ -990,10 +990,9 @@ async function initLibLouis(){
       console.log('[LibLouis] ✓ 초기화 완료, 버전:',liblouis.version());
       updateLouisStatusBadge(louisReady);
       // langInfo "로딩 중" 메시지 제거 + 재변환
-      setLang(lang);
+      // fix: setLang이 내부적으로 !pdfMode 시 onTextInput() 호출하므로 이중 렌더 방지
+      setLang(lang, true); // skipGreeting=true (인사말 변경 없이 재변환만)
       if(pdfMode) setPdfLang(pdfLang);
-      const ta=document.getElementById('textInput');
-      if(ta&&ta.value) onTextInput();
     }
   }catch(e){
     console.warn('[LibLouis] 초기화 오류:', e);
@@ -1566,6 +1565,7 @@ function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
  * pages 항목: 문자열(텍스트 페이지) 또는 {type:'image', dots:Uint8Array(300)}(이미지 페이지)
  */
 function setupVirtualDoc(filename, pages, type, origText=''){
+  cancelSend(); // fix: 진행 중 전송 취소 (race condition 방지)
   docType=type;
   pdfDoc=null;            // PDF.js 객체 없음
   pdfTotalPages=pages.length;
@@ -1573,7 +1573,9 @@ function setupVirtualDoc(filename, pages, type, origText=''){
   pdfPageTexts={};
   // BUG-07 fix: 원본 전문 저장 (언어 변경 시 재분할에 사용)
   // origText가 전달된 경우 직접 사용, 없으면 텍스트 페이지를 연결해 복원
+  pdfViewMode='graphic'; // fix: 이전 세션 뷰 모드 초기화
   pdfOrigFullText=origText || pages.filter(p=>typeof p==='string').join('\n\n');
+  _brfHintsCache.clear(); // fix: 이전 BRF 힌트 캐시 클리어
   pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
   pdfPageSubTexts={}; pdfCurrentSubPage=0; // BUG-03 fix: 서브페이지 캐시 초기화
   pages.forEach((p,i)=>{
@@ -1683,10 +1685,14 @@ async function loadPdf(file){
   showPdfLoading(`${file.name} 불러오는 중...`);
 
   try{
+    cancelSend(); // fix: 진행 중 전송 취소 (다른 로더와 일관성 확보)
     const arrayBuffer=await file.arrayBuffer();
     pdfDoc=await pdfjsLib.getDocument({data:arrayBuffer}).promise;
     pdfTotalPages=pdfDoc.numPages;
     pdfCurrentPage=1;
+    pdfOrigFullText='';  // fix: 이전 TXT/DOCX 내용 잔류 방지
+    pdfViewMode='graphic'; // fix: 이전 세션 뷰 모드 초기화
+    _brfHintsCache.clear(); // fix: 이전 BRF 힌트 캐시 클리어
     pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={};
     pdfPageSubTexts={}; pdfPageIsOcr={}; pdfCurrentSubPage=0;
     pdfMode=true; docType='pdf';
@@ -1713,6 +1719,7 @@ async function loadPdf(file){
 /**
  * BRF ASCII 내용 → 6점 셀 배열 페이지로 변환
  * 규칙: 문자코드 - 32 = 점자 6점 비트마스크 (0x20=' '=0 ~ 0x5F='_'=63)
+ * 유효 범위: 0x20(32)~0x5F(95), 96-127은 BRF 규격 외 → 무시
  * LF 무시(reflow), FF → 현재 행 마무리 + 빈 행 1줄 삽입, CR 무시
  * 전체를 300셀 단위로 DotPad 페이지 분할
  */
@@ -1726,12 +1733,14 @@ function parseBrfToCellPages(content){
     if(code===13) continue;  // CR: 무시
     if(code===10) continue;  // LF: 무시 (reflow)
     if(code===12){           // FF: 현재 행 끝까지 패딩 후 빈 행 1줄 삽입
+      if(allCells.length===0) continue; // fix: 파일 선두 FF → spurious blank row 방지
       const rem=allCells.length%ROW;
       if(rem>0) for(let j=0;j<ROW-rem;j++) allCells.push(0); // 현재 행 마무리
       for(let j=0;j<ROW;j++) allCells.push(0);               // 빈 행 1줄
       continue;
     }
-    if(code>=32 && code<=127) allCells.push((code-32)&0x3F);
+    // fix: 96-127(0x60-0x7F)는 BRF 규격 외 — &0x3F로 wrapping하면 오염됨 → 무시
+    if(code>=32 && code<=95) allCells.push(code-32);
   }
 
   // 내용 없는 파일
@@ -1746,7 +1755,7 @@ function parseBrfToCellPages(content){
     pages.push(cells);
   }
 
-  return pages.length>0?pages:[new Uint8Array(PAGE)];
+  return pages; // length>0 항상 보장 (위 some 체크 통과 시)
 }
 
 /** BRF 셀 배열 → 유니코드 점자 텍스트 (텍스트 미리보기용) */
@@ -1774,10 +1783,13 @@ async function loadBrf(file){
     pdfDoc=null;
     pdfTotalPages=cellPages.length;
     pdfCurrentPage=1;
+    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
+    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
     pdfPageTexts={};
     pdfPageDots={};
     pdfPageHasImg={};
     pdfPageIsOcr={};
+    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
     pdfMode=true;
     // BRF/BRL은 대부분 영어 점자 — 역번역 기본 언어를 영어로 설정
     pdfLang='en';
@@ -1865,10 +1877,13 @@ async function loadEbrf(file){
     pdfDoc=null;
     pdfTotalPages=cellPages.length;
     pdfCurrentPage=1;
+    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
+    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
     pdfPageTexts={};
     pdfPageDots={};
     pdfPageHasImg={};
     pdfPageIsOcr={};
+    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
     pdfMode=true;
     // EBRF는 대부분 영어 점자 — 언어 코드에서 'ko' 감지 시 한국어로 설정
     pdfLang=lang.toLowerCase().startsWith('ko')?'ko':'en';
@@ -2040,10 +2055,11 @@ async function loadEbrl(file){
     let allBrailleText='';
 
     for(const href of spineHrefs){
-      // 상대 경로 해석: opfPath 기준
-      const fullPath=opfDir+href;
-      const cf=zip.file(fullPath)||zip.file(href); // fallback: root 기준
-      if(!cf){ addLog('warn',`eBraille: ${fullPath} 를 찾을 수 없어 건너뜁니다`); continue; }
+      // 상대 경로 해석: opfPath 기준 + fix: URL 인코딩 디코딩 (공백=%20 등)
+      const decodedHref=decodeURIComponent(href);
+      const fullPath=opfDir+decodedHref;
+      const cf=zip.file(fullPath)||zip.file(decodedHref)||zip.file(opfDir+href)||zip.file(href);
+      if(!cf){ addLog('err',`eBraille: ${fullPath} 를 찾을 수 없어 건너뜁니다`); continue; } // fix: 'warn'→'err' (addLog에 warn 타입 없음)
 
       const xhtml=await cf.async('text');
       const xDoc=new DOMParser().parseFromString(xhtml,'application/xhtml+xml');
@@ -2076,7 +2092,10 @@ async function loadEbrl(file){
     pdfDoc=null;
     pdfTotalPages=cellPages.length;
     pdfCurrentPage=1;
+    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
+    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
     pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
+    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
     pdfMode=true;
     // 언어: BCP 47 태그 'ko-Brai' 등 → 앞 2글자로 판단
     pdfLang=langRaw.toLowerCase().startsWith('ko')?'ko':'en';
@@ -2194,7 +2213,7 @@ function applyImagePipeline(ctx, W, H){
 
 /**
  * 이미지 URL/DataURL → 닷패드 dot cell 배열 (300개)
- * fit-to-contain(비율 유지) + 중앙 배치 + preprocessForDots + 면적 샘플링
+ * fit-to-contain(비율 유지) + 중앙 배치 + applyImagePipeline + 면적 샘플링
  */
 function imgSrcToDotCells(imgSrc){
   return new Promise((resolve,reject)=>{
@@ -2270,8 +2289,8 @@ async function ocrPdfPage(pdfPage){
  * 반환: 전체 페이지 인식 텍스트 (string)
  */
 async function ocrDocxImages(arrayBuffer){
-  // mammoth HTML 변환으로 embedded 이미지(base64) 추출
-  const htmlResult=await mammoth.convertToHtml({arrayBuffer});
+  // fix: 호출부(loadDocx)에서 이미 arrayBuffer를 소비했을 수 있으므로 slice(0) 복사본 사용
+  const htmlResult=await mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)});
   const parser=new DOMParser();
   const doc=parser.parseFromString(htmlResult.value,'text/html');
   const imgs=Array.from(doc.querySelectorAll('img[src^="data:image"]'));
@@ -2310,7 +2329,7 @@ async function ocrDocxImages(arrayBuffer){
  *  ① SCALE 3→5: 도트당 5×5픽셀 확보 → 면적 샘플링 정밀도 향상
  *  ② fit-to-contain: 가로+세로 모두 맞게 → 세로 PDF 상단만 잘리던 문제 해결
  *  ③ 중앙 배치: PDF 페이지를 도트 그리드 중앙에 정렬
- *  ④ Sobel 엣지 제거 → preprocessForDots(Gaussian+Otsu) 적용
+ *  ④ applyImagePipeline(Gaussian blur + Otsu 이진화) 적용
  *  ⑤ canvasToDotCells: 면적 기반 샘플링 (단일 픽셀 → 5×5 영역 평균)
  */
 async function renderPageToDots(pdfPage){
@@ -2338,7 +2357,7 @@ async function renderPageToDots(pdfPage){
   await pdfPage.render({canvasContext:ctx, viewport:vp, transform:[1,0,0,1,ox,oy]}).promise;
 
   // ④ 전처리 (Sobel 제거 → Gaussian blur + Otsu 이진화)
-  preprocessForDots(ctx, canvW, canvH);
+  applyImagePipeline(ctx, canvW, canvH); // fix: preprocessForDots 제거 후 누락된 호출 교체
 
   // ⑤ 면적 기반 도트 셀 매핑
   const cells=canvasToDotCells(ctx.getImageData(0,0,canvW,canvH),canvW,canvH,DOT_W,DOT_H);
@@ -2404,7 +2423,8 @@ function looksLikeRealText(text){
 }
 
 async function getPdfPageText(pageNum){
-  if(pdfPageTexts[pageNum]) return pdfPageTexts[pageNum];
+  // fix: 빈 문자열('')은 falsy → 캐시 히트 누락. undefined 체크로 변경
+  if(pdfPageTexts[pageNum]!==undefined) return pdfPageTexts[pageNum];
   const page=await pdfDoc.getPage(pageNum);
   const content=await page.getTextContent();
   // 텍스트 아이템을 이어붙이되 줄바꿈 보존
@@ -2681,7 +2701,8 @@ function updateViewModeBadge(hasImg){
 
 // 같은 페이지 내에서 graphic ↔ text 뷰 전환 (페이지 이동 없음)
 async function switchPdfView(targetMode){
-  if(!pdfDoc) return;
+  // fix: !pdfDoc 가드 → !pdfMode 가드 (TXT/DOCX 이미지 페이지도 뷰 전환 가능하도록)
+  if(!pdfMode) return;
   pdfViewMode=targetMode;
   const hasImg=!!pdfPageHasImg[pdfCurrentPage];
   updateViewModeBadge(hasImg);
@@ -2692,20 +2713,22 @@ async function switchPdfView(targetMode){
 
   if(targetMode==='graphic'){
     // 이미지 도트로 전환
-    const pdfPage=await pdfDoc.getPage(pdfCurrentPage);
-    const imgDots=await renderPageToDots(pdfPage);
+    // fix: pdfDoc이 있을 때만 PDF 페이지 렌더 시도 (TXT/DOCX는 캐시 사용)
+    const cachedDots=pdfPageDots[pdfCurrentPage];
+    const imgDots=cachedDots || (pdfDoc ? await renderPageToDots(await pdfDoc.getPage(pdfCurrentPage)) : new Uint8Array(CELLS_GRAPHIC));
     const tHintsImg=buildCellHints(pageLabel,'en');
     renderBothPreviews(imgDots, textLineCells, [], tHintsImg);
     if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
     addLog('info','🖼 이미지 뷰로 전환');
     if(bleChar&&!isSending){
+      const sv=++sendVersion;
       isSending=true; setSendBtn(true);
       try{
         await sendTextMode(textLineCells); await sleep(50);
-        await sendGraphicMode(imgDots);
+        await sendGraphicMode(imgDots, sv); // fix: sv 전달
         addLog('ok','✓ 이미지 전송 완료');
       }catch(e){addLog('err',`전송 오류: ${e.message}`);}
-      setSendBtn(false); isSending=false;
+      finally{ setSendBtn(false); isSending=false; } // fix: finally
     }
   } else {
     // 텍스트 도트로 전환 — 서브페이지 시스템 적용
@@ -2721,13 +2744,14 @@ async function switchPdfView(targetMode){
     if(sub) sub.textContent=`페이지 번호: ${pageLabel}`;
     addLog('info',`📝 텍스트 뷰로 전환${subs.length>1?` (${pdfCurrentSubPage+1}/${subs.length})`:''}`);
     if(bleChar&&!isSending){
+      const sv=++sendVersion;
       isSending=true; setSendBtn(true);
       try{
         await sendTextMode(textLineCells); await sleep(50);
-        await sendGraphicMode(bodyCells.slice(0,CELLS_GRAPHIC));
+        await sendGraphicMode(bodyCells.slice(0,CELLS_GRAPHIC), sv); // fix: sv 전달
         addLog('ok','✓ 텍스트 전송 완료');
       }catch(e){addLog('err',`전송 오류: ${e.message}`);}
-      setSendBtn(false); isSending=false;
+      finally{ setSendBtn(false); isSending=false; } // fix: finally
     }
   }
 }
@@ -2839,8 +2863,10 @@ async function sendPdfDual(bodyText, pageNum, imgDots=null){
       addLog('err',`전송 오류: ${e.message}`);
       setPdfDotpadStatus('idle','전송 오류','다시 시도하세요');
     }
+  }finally{
+    // fix: try/finally로 isSending 항상 정리 (취소+에러 동시 발생 시 stuck 방지)
+    if(sendVersion===sv){setSendBtn(false); isSending=false;}
   }
-  if(sendVersion===sv){setSendBtn(false); isSending=false;}
 }
 
 // ============================================================
@@ -2901,13 +2927,14 @@ async function sendGraphicMode(cells, sv){
 }
 async function sendCurrentPage(){
   if(!bleChar||isSending)return;
+  const sv=++sendVersion; // fix: sendVersion 참여 → 패닝키로 취소 가능
   isSending=true;setSendBtn(true);
   const cells=getPageCells();
   try{
     if(dispMode==='text'){await sendTextMode(cells);addLog('ok','✓ 텍스트 전송 완료 — 20셀');}
-    else{addLog('send','그래픽 멀티라인 전송 중...');await sendGraphicMode(cells);addLog('ok','✓ 그래픽 전송 완료 — 300셀');}
+    else{addLog('send','그래픽 멀티라인 전송 중...');await sendGraphicMode(cells,sv);addLog('ok','✓ 그래픽 전송 완료 — 300셀');}
   }catch(e){addLog('err',`전송 오류: ${e.message}`);}
-  setSendBtn(false);isSending=false;
+  finally{ setSendBtn(false);isSending=false; } // fix: finally로 항상 상태 정리
 }
 function setSendBtn(sending){
   const b=document.getElementById('sendBtn');
@@ -2962,10 +2989,14 @@ async function connectDotPad(){
   }
 }
 async function disconnectDotPad(){
-  if(bleDevice?.gatt.connected) await bleDevice.gatt.disconnect(); // RISK-07 fix: await 추가
-  onDisconnected();
+  // fix: gatt.disconnect()이 gattserverdisconnected 이벤트를 발생시켜 onDisconnected가
+  //      이미 호출되므로 직접 호출 제거 → 이중 실행 방지
+  if(bleDevice?.gatt.connected) await bleDevice.gatt.disconnect();
+  // 이미 연결이 끊긴 경우(이벤트 미발생) 직접 호출
+  else onDisconnected();
 }
 function onDisconnected(){
+  cancelSend(); // fix: 진행 중 BLE 전송 즉시 취소 (null bleChar 오류 방지)
   // fix: 리스너 명시적 제거 — 재연결 시 누적 방지
   if(bleDevice) bleDevice.removeEventListener('gattserverdisconnected',onDisconnected);
   if(bleChar){
@@ -3083,9 +3114,11 @@ function scheduleAutoSend(){
   clearTimeout(autoTimer);
   document.getElementById('liveText').textContent='입력 감지...';
   autoTimer=setTimeout(async()=>{
+    if(!bleChar||!autoEnabled) return; // fix: 타이머 만료 시점에 연결 상태 재확인
     document.getElementById('liveText').textContent='전송 중...';
     await sendCurrentPage();
-    document.getElementById('liveText').textContent='실시간 동기화';
+    // fix: 전송 완료 후 autoEnabled 상태 확인 후 텍스트 복원
+    if(autoEnabled) document.getElementById('liveText').textContent='실시간 동기화';
   },400);
 }
 
@@ -3097,7 +3130,8 @@ function setDisplayMode(mode){
   document.getElementById('modeText').classList.toggle('active',mode==='text');
   document.getElementById('modeGraphic').classList.toggle('active',mode==='graphic');
   dotpadPage=0;updatePageUI();
-  if(bleChar) sendCurrentPage();
+  // fix: pdfMode 중에는 텍스트 입력 모드 전송 방지 (PDF 콘텐츠 덮어쓰기 방지)
+  if(bleChar && !pdfMode) sendCurrentPage();
 }
 
 // ============================================================
@@ -3379,13 +3413,15 @@ function setGrade(g){
   const gLabel=g===2?'G2 약자':'G1';
   const gs=document.getElementById('gradeStat');
   if(gs)gs.innerHTML=`등급 <span>${gLabel}</span>`;
-  // langInfo 등급 표시 동기화 (IMP-06 fix: skipGreeting=true — 입력창 내용 유지)
-  setLang(lang, true);
+  // fix: setLang이 내부적으로 !pdfMode 시 onTextInput()을 호출하므로
+  //      else 분기의 onTextInput() 제거하여 이중 렌더 방지
+  // langInfo 등급 표시 동기화 (skipGreeting=true — 입력창 내용 유지)
+  setLang(lang, true); // 이 호출이 !pdfMode 시 onTextInput() 포함
   if(pdfMode){
     // Grade 변경 시 셀 수 달라지므로 서브페이지 캐시 무효화
     pdfPageSubTexts={}; pdfCurrentSubPage=0;
     displayPdfPage(pdfCurrentPage, 0);
-  } else onTextInput();
+  }
 }
 function copyUnicode(){
   const t=document.getElementById('unicodeDisplay').textContent;
