@@ -93,6 +93,17 @@ textarea::placeholder{color:#c8c6bc;}
   font-size:13px;font-weight:600;
   pointer-events:none;
 }
+/* 파일 불러오기 전 언어·등급 선택 옵션 영역 */
+.drop-options{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin-top:12px;padding:10px 14px;
+  background:#f5f3ee;border:1.5px solid #e8e6dc;border-radius:10px;
+  position:relative;z-index:2; /* 파일 입력 투명 레이어(inset:0) 위로 노출 */
+}
+.drop-opt-label{font-size:11px;font-weight:600;color:#b0aea5;white-space:nowrap;}
+.drop-options .lang-select{font-size:12px;padding:4px 8px;height:28px;}
+.drop-options .seg{gap:4px;}
+.drop-options .seg-btn{font-size:11px;padding:3px 10px;height:26px;}
 
 /* PDF info bar */
 .pdf-info-bar{
@@ -403,7 +414,7 @@ textarea::placeholder{color:#c8c6bc;}
      PDF UPLOAD
      ============================================================ -->
 <div class="pdf-card">
-  <div class="section-title">문서 불러오기 · PDF / DOCX / TXT</div>
+  <div class="section-title">문서 불러오기 · PDF / DOCX / TXT / BRF / EBRL</div>
 
   <!-- Drop zone (shown when no file loaded) -->
   <div id="dropZoneWrap">
@@ -419,6 +430,26 @@ textarea::placeholder{color:#c8c6bc;}
         <span style="background:#eef4e8;border:1px solid #c4d4a8;color:#4a6a30;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">📃 TXT</span>
         <span style="background:#f5f0fe;border:1px solid #d4b8f5;color:#6a30a0;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ BRF</span>
         <span style="background:#fef0f8;border:1px solid #f5b8df;color:#a03070;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ BRL</span>
+        <span style="background:#fff8e8;border:1px solid #f5dfa8;color:#a07030;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ EBRF</span>
+        <span style="background:#e8f8f0;border:1px solid #a8d4b8;color:#207050;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;">⠿ eBraille</span>
+      </div>
+    </div>
+
+    <!-- 파일 로드 전 점역 언어·등급 선택 (파일 input 투명 레이어 밖에 위치) -->
+    <div class="drop-options" onclick="event.stopPropagation()">
+      <span class="drop-opt-label">점역 언어</span>
+      <select id="preLoadLang" class="lang-select" onchange="onPreLoadLangChange(this.value)">
+        <option value="ko" selected>🇰🇷 한국어</option>
+        <option value="en">🇺🇸 English</option>
+        <option value="fr">🇫🇷 Français</option>
+        <option value="de">🇩🇪 Deutsch</option>
+        <option value="es">🇪🇸 Español</option>
+        <option value="ar">🇸🇦 العربية</option>
+      </select>
+      <span class="drop-opt-label" style="margin-left:4px;">등급</span>
+      <div class="seg">
+        <button class="seg-btn active" id="preG1Btn" onclick="onPreLoadGradeChange(1)" title="Grade 1 완전풀기">G1</button>
+        <button class="seg-btn"        id="preG2Btn" onclick="onPreLoadGradeChange(2)" title="Grade 2 약자">G2</button>
       </div>
     </div>
   </div>
@@ -1506,6 +1537,17 @@ function textToCells(text, language){
 // ============================================================
 // PDF 기능
 // ============================================================
+
+// ── 파일 로드 전 언어·등급 선택 핸들러 ──────────────────────────
+function onPreLoadLangChange(v){
+  pdfLang=v;
+  // 로드 후 언어 선택 드롭다운과 동기화
+  const loaded=document.getElementById('pdfLangSelect');
+  if(loaded) loaded.value=v;
+}
+function onPreLoadGradeChange(g){
+  setGrade(g); // setGrade가 내부적으로 모든 버튼 동기화 처리
+}
 
 // 드래그 앤 드롭
 function onDragOver(e){e.preventDefault();document.getElementById('dropZone').classList.add('drag-over');}
@@ -2638,6 +2680,9 @@ function setPdfLang(l){
   _brfHintsCache.clear(); // 언어 변경 → BRF 역번역 캐시 무효화
   const sel=document.getElementById('pdfLangSelect');
   if(sel) sel.value=l;
+  // 파일 로드 전 선택 드롭다운도 동기화
+  const pre=document.getElementById('preLoadLang');
+  if(pre) pre.value=l;
   if(!pdfMode) return;
   if(docType==='txt'||docType==='docx'){
     // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
@@ -3405,8 +3450,8 @@ function setGrade(g){
   _cellCache.clear(); // 등급 변경 → 변환 결과 캐시 무효화
   _brfHintsCache.clear(); // 등급 변경 → BRF 역번역 캐시 무효화
   if(isSending) cancelSend(); // 진행 중인 전송 중단
-  // 모든 Grade 버튼 상태 동기화
-  ['btnG1','btnG2','pdfBtnG1','pdfBtnG2'].forEach(id=>{
+  // 모든 Grade 버튼 상태 동기화 (preG1Btn/preG2Btn 포함)
+  ['btnG1','btnG2','pdfBtnG1','pdfBtnG2','preG1Btn','preG2Btn'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.toggle('active',(id.endsWith('G1')&&g===1)||(id.endsWith('G2')&&g===2));
   });
