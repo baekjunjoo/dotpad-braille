@@ -1511,14 +1511,14 @@ function textToCells(text, language){
 
   let cells=null;
 
-  // ① braillify 우선 — 한국어 & 초기화 완료 시 (Grade 1/2 모두)
-  //    상동기호 등 braillify 미지원 문자가 포함되면 LibLouis/내장 fallback
-  if(braillifyReady && text && language==='ko'){
+  // ① braillify — 한국어 G1 전용 (braillify는 grade 파라미터 없이 항상 G1 출력)
+  //    G2 한국어는 ②LibLouis ko-g2.ctb로 처리
+  if(braillifyReady && text && language==='ko' && grade===1){
     cells=braillifyTranslate(text);
   }
-  // ② LibLouis — 영어/다국어 & 초기화 완료 시
+  // ② LibLouis — G2 한국어 / 영어 / 다국어 & 초기화 완료 시
   if(cells===null && louisReady && text && LOUIS_TABLES[language]){
-    cells=louisTextToCells(text, language, grade); // 전역 grade 직접 사용
+    cells=louisTextToCells(text, language, grade); // 전역 grade 그대로 전달 (ko-g2.ctb 등)
   }
   if(cells!==null){
     if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
@@ -3419,7 +3419,27 @@ function onTextInput(){
     document.getElementById('cellCount').textContent=0;
     allCells=[];allGraphicCells=[];updatePageUI();return;
   }
+
+  // breakdown display: convertText 구조(글자별 분해) 유지
   renderAll(convertText(text,lang));
+
+  // 실제 점자 셀 오버라이드: textToCells (braillify G1 / LibLouis G2 — 올바른 약자·약어 적용)
+  const properCells=textToCells(text,lang);
+  if(properCells && properCells.length>0){
+    allCells=[...properCells];
+    allGraphicCells=[...properCells];
+    // textLineCells도 올바른 값으로 갱신
+    if(dispMode==='text') textLineCells=[...properCells];
+    else textLineCells=properCells.slice(0,CELLS_TEXT);
+    // unicodeDisplay를 올바른 셀로 다시 렌더
+    document.getElementById('unicodeDisplay').textContent=
+      properCells.map(v=>toUnicode(v)).join('');
+    // 셀 카운트도 갱신
+    document.getElementById('cellCount').textContent=
+      properCells.filter(v=>v!==0).length;
+    updatePageUI();
+  }
+
   scheduleAutoSend();
 }
 function setLang(l, skipGreeting=false){
