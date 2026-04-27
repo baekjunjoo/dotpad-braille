@@ -130,17 +130,52 @@ textarea::placeholder{color:#c8c6bc;}
 }
 .img-decision-confirm:hover{background:#c86848;}
 
-/* 파일 불러오기 전 언어·등급 선택 옵션 영역 */
-.drop-options{
-  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  margin-top:12px;padding:10px 14px;
-  background:#f5f3ee;border:1.5px solid #e8e6dc;border-radius:10px;
-  position:relative;z-index:2; /* 파일 입력 투명 레이어(inset:0) 위로 노출 */
+/* ── 파일 로드 설정 다이얼로그 ───────────────────────────────── */
+.file-load-overlay{
+  position:fixed;inset:0;background:rgba(20,20,19,.5);z-index:200;
+  display:flex;align-items:center;justify-content:center;padding:16px;
 }
-.drop-opt-label{font-size:11px;font-weight:600;color:#b0aea5;white-space:nowrap;}
-.drop-options .lang-select{font-size:12px;padding:4px 8px;height:28px;}
-.drop-options .seg{gap:4px;}
-.drop-options .seg-btn{font-size:11px;padding:3px 10px;height:26px;}
+.file-load-dialog{
+  background:#fff;border-radius:16px;width:100%;max-width:380px;
+  box-shadow:0 8px 32px rgba(20,20,19,.18);overflow:hidden;
+}
+.fld-header{
+  padding:20px 22px 16px;border-bottom:1px solid #e8e6dc;
+  display:flex;align-items:center;gap:12px;
+}
+.fld-file-icon{font-size:28px;line-height:1;}
+.fld-file-name{font-size:14px;font-weight:700;color:#141413;word-break:break-all;line-height:1.3;}
+.fld-file-type{font-size:11px;color:#b0aea5;margin-top:2px;}
+.fld-body{padding:18px 22px;}
+.fld-row{margin-bottom:16px;}
+.fld-row:last-child{margin-bottom:0;}
+.fld-label{font-size:11px;font-weight:700;color:#b0aea5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;}
+.fld-lang-select{
+  width:100%;padding:9px 12px;border:1.5px solid #e8e6dc;border-radius:9px;
+  font-size:13px;background:#faf9f5;color:#141413;cursor:pointer;
+}
+.fld-lang-select:focus{outline:none;border-color:#d97757;}
+.fld-grade-row{display:flex;gap:8px;}
+.fld-grade-btn{
+  flex:1;padding:9px 0;border:1.5px solid #e8e6dc;border-radius:9px;
+  font-size:12px;font-weight:700;background:#faf9f5;color:#b0aea5;cursor:pointer;
+  transition:all .15s;
+}
+.fld-grade-btn.active{background:#d97757;border-color:#d97757;color:#fff;}
+.fld-grade-desc{font-size:10px;font-weight:400;margin-top:2px;display:block;}
+.fld-note{font-size:11px;color:#b0aea5;background:#f5f3ee;border-radius:7px;padding:7px 10px;margin-top:10px;}
+.fld-footer{
+  padding:12px 22px 18px;display:flex;gap:8px;justify-content:flex-end;
+}
+.fld-cancel{
+  padding:9px 18px;border:1.5px solid #e8e6dc;border-radius:9px;
+  background:#fff;color:#b0aea5;font-size:13px;font-weight:600;cursor:pointer;
+}
+.fld-confirm{
+  padding:9px 22px;border:none;border-radius:9px;
+  background:#d97757;color:#fff;font-size:13px;font-weight:700;cursor:pointer;
+}
+.fld-confirm:hover{background:#c86848;}
 
 /* PDF info bar */
 .pdf-info-bar{
@@ -472,21 +507,46 @@ textarea::placeholder{color:#c8c6bc;}
       </div>
     </div>
 
-    <!-- 파일 로드 전 점역 언어·등급 선택 (파일 input 투명 레이어 밖에 위치) -->
-    <div class="drop-options" onclick="event.stopPropagation()">
-      <span class="drop-opt-label">점역 언어</span>
-      <select id="preLoadLang" class="lang-select" onchange="onPreLoadLangChange(this.value)">
-        <option value="ko" selected>🇰🇷 한국어</option>
-        <option value="en">🇺🇸 English</option>
-        <option value="fr">🇫🇷 Français</option>
-        <option value="de">🇩🇪 Deutsch</option>
-        <option value="es">🇪🇸 Español</option>
-        <option value="ar">🇸🇦 العربية</option>
-      </select>
-      <span class="drop-opt-label" style="margin-left:4px;">등급</span>
-      <div class="seg">
-        <button class="seg-btn active" id="preG1Btn" onclick="onPreLoadGradeChange(1)" title="Grade 1 완전풀기">G1</button>
-        <button class="seg-btn"        id="preG2Btn" onclick="onPreLoadGradeChange(2)" title="Grade 2 약자">G2</button>
+  </div>
+
+  <!-- 파일 로드 설정 다이얼로그 -->
+  <div id="fileLoadOverlay" class="file-load-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="file-load-dialog">
+      <div class="fld-header">
+        <div class="fld-file-icon" id="fldFileIcon">📄</div>
+        <div>
+          <div class="fld-file-name" id="fldFileName">파일명</div>
+          <div class="fld-file-type" id="fldFileType">문서</div>
+        </div>
+      </div>
+      <div class="fld-body">
+        <div class="fld-row">
+          <div class="fld-label">점역 언어</div>
+          <select id="fldLang" class="fld-lang-select">
+            <option value="ko">🇰🇷 한국어</option>
+            <option value="en">🇺🇸 English</option>
+            <option value="fr">🇫🇷 Français</option>
+            <option value="de">🇩🇪 Deutsch</option>
+            <option value="es">🇪🇸 Español</option>
+            <option value="ar">🇸🇦 العربية</option>
+          </select>
+        </div>
+        <div class="fld-row">
+          <div class="fld-label">점역 등급</div>
+          <div class="fld-grade-row">
+            <button class="fld-grade-btn active" id="fldG1Btn" onclick="fldSetGrade(1)">
+              G1<span class="fld-grade-desc">철자 그대로</span>
+            </button>
+            <button class="fld-grade-btn" id="fldG2Btn" onclick="fldSetGrade(2)">
+              G2<span class="fld-grade-desc">약자·약어 사용</span>
+            </button>
+          </div>
+          <div id="fldNote" class="fld-note" style="display:none"></div>
+        </div>
+      </div>
+      <div class="fld-footer">
+        <button class="fld-cancel" onclick="cancelFileLoad()">취소</button>
+        <button class="fld-confirm" onclick="confirmFileLoad()">▶ 로드 시작</button>
       </div>
     </div>
   </div>
@@ -1677,15 +1737,87 @@ function textToCells(text, language){
 // PDF 기능
 // ============================================================
 
-// ── 파일 로드 전 언어·등급 선택 핸들러 ──────────────────────────
-function onPreLoadLangChange(v){
-  pdfLang=v;
-  // 로드 후 언어 선택 드롭다운과 동기화
-  const loaded=document.getElementById('pdfLangSelect');
-  if(loaded) loaded.value=v;
+// ============================================================
+// 파일 로드 설정 다이얼로그
+// ============================================================
+
+let _pendingFile=null; // 다이얼로그 확인 후 로드할 파일
+
+const FILE_META={
+  pdf: {icon:'📄', label:'PDF 문서'},
+  doc: {icon:'📝', label:'Word 문서'},
+  docx:{icon:'📝', label:'Word 문서'},
+  txt: {icon:'📃', label:'텍스트 파일'},
+  brf: {icon:'⠿',  label:'BRF 점자 파일', autoLang:true},
+  brl: {icon:'⠿',  label:'BRL 점자 파일', autoLang:true},
+  ebrf:{icon:'⠿',  label:'EBRF 점자 파일', autoLang:true},
+  ebrl:{icon:'⠿',  label:'eBraille 1.0 파일', autoLang:true},
+};
+
+/** 파일 선택 시 설정 다이얼로그 표시 */
+function openFileLoadDialog(file){
+  if(!file) return;
+  _pendingFile=file;
+  const ext=file.name.split('.').pop().toLowerCase();
+  const meta=FILE_META[ext]||{icon:'📄',label:'문서'};
+
+  document.getElementById('fldFileIcon').textContent=meta.icon;
+  document.getElementById('fldFileName').textContent=file.name;
+  document.getElementById('fldFileType').textContent=meta.label;
+
+  // 현재 전역 설정으로 초기화
+  const langSel=document.getElementById('fldLang');
+  langSel.value=pdfLang;
+  langSel.disabled=!!meta.autoLang;
+
+  fldSetGrade(grade, true); // 버튼 상태만 동기화 (setGrade 전체 호출 X)
+
+  // BRF/eBRL 등 언어 자동 감지 안내
+  const note=document.getElementById('fldNote');
+  if(meta.autoLang){
+    note.textContent='⠿ 점자 파일은 언어 설정을 파일에서 자동 감지합니다.';
+    note.style.display='block';
+    langSel.style.opacity='.5';
+  }else{
+    note.style.display='none';
+    langSel.style.opacity='1';
+  }
+
+  document.getElementById('fileLoadOverlay').style.display='flex';
+  document.getElementById('fldLang').focus();
 }
-function onPreLoadGradeChange(g){
-  setGrade(g); // setGrade가 내부적으로 모든 버튼 동기화 처리
+
+/** 다이얼로그 내 등급 버튼 전환 (전역 grade는 확인 시 적용) */
+let _fldGrade=1;
+function fldSetGrade(g, syncOnly=false){
+  _fldGrade=g;
+  document.getElementById('fldG1Btn').classList.toggle('active', g===1);
+  document.getElementById('fldG2Btn').classList.toggle('active', g===2);
+  if(!syncOnly) _fldGrade=g;
+}
+
+/** 확인: 설정 적용 후 로드 시작 */
+function confirmFileLoad(){
+  document.getElementById('fileLoadOverlay').style.display='none';
+  if(!_pendingFile) return;
+
+  // 언어 적용
+  const selLang=document.getElementById('fldLang').value;
+  pdfLang=selLang;
+  const pdfLangEl=document.getElementById('pdfLangSelect');
+  if(pdfLangEl) pdfLangEl.value=selLang;
+
+  // 등급 적용
+  if(_fldGrade!==grade) setGrade(_fldGrade);
+
+  routeFileLoad(_pendingFile);
+  _pendingFile=null;
+}
+
+/** 취소 */
+function cancelFileLoad(){
+  document.getElementById('fileLoadOverlay').style.display='none';
+  _pendingFile=null;
 }
 
 // 드래그 앤 드롭
@@ -1705,10 +1837,10 @@ function routeFileLoad(file){
 function onDrop(e){
   e.preventDefault();
   document.getElementById('dropZone').classList.remove('drag-over');
-  routeFileLoad(e.dataTransfer.files[0]);
+  openFileLoadDialog(e.dataTransfer.files[0]); // 직접 로드 → 다이얼로그로
 }
 function onFileSelect(e){
-  routeFileLoad(e.target.files[0]);
+  openFileLoadDialog(e.target.files[0]); // 직접 로드 → 다이얼로그로
   e.target.value=''; // 같은 파일 재선택 허용
 }
 
@@ -2925,9 +3057,9 @@ function setPdfLang(l){
   _brfHintsCache.clear(); // 언어 변경 → BRF 역번역 캐시 무효화
   const sel=document.getElementById('pdfLangSelect');
   if(sel) sel.value=l;
-  // 파일 로드 전 선택 드롭다운도 동기화
-  const pre=document.getElementById('preLoadLang');
-  if(pre) pre.value=l;
+  // 파일 로드 설정 다이얼로그 언어도 동기화
+  const fldLang=document.getElementById('fldLang');
+  if(fldLang) fldLang.value=l;
   if(!pdfMode) return;
   if(docType==='txt'||docType==='docx'){
     // TXT/DOCX: 언어 바뀌면 페이지 분할 재계산
@@ -3732,8 +3864,8 @@ function setGrade(g){
   _cellCache.clear(); // 등급 변경 → 변환 결과 캐시 무효화
   _brfHintsCache.clear(); // 등급 변경 → BRF 역번역 캐시 무효화
   if(isSending) cancelSend(); // 진행 중인 전송 중단
-  // 모든 Grade 버튼 상태 동기화 (preG1Btn/preG2Btn 포함)
-  ['btnG1','btnG2','pdfBtnG1','pdfBtnG2','preG1Btn','preG2Btn'].forEach(id=>{
+  // 모든 Grade 버튼 상태 동기화
+  ['btnG1','btnG2','pdfBtnG1','pdfBtnG2'].forEach(id=>{
     const el=document.getElementById(id);
     if(el) el.classList.toggle('active',(id.endsWith('G1')&&g===1)||(id.endsWith('G2')&&g===2));
   });
