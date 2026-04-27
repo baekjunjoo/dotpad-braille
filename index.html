@@ -1547,6 +1547,33 @@ function buildKoG2DisplayResult(text){
   return res;
 }
 
+/**
+ * LibLouis 기반 시각화용 구조화 결과 (FR/DE/AR 등 내부 G2 구현 없는 언어)
+ * 토큰(단어/공백) 단위로 LibLouis 처리 → renderAll 호환 구조체 반환
+ * LibLouis 미준비 시 convertText fallback
+ */
+function buildLibLouisDisplayResult(text, language, g){
+  if(!louisReady) return convertText(text, language); // fallback
+  const res=[];
+  // 공백 기준 토큰 분리 (공백 자체도 보존)
+  const tokens=text.split(/(\s+)/);
+  for(const token of tokens){
+    if(!token) continue;
+    if(/^\s+$/.test(token)){
+      for(const ch of token)
+        res.push({orig:ch,label:'␣',cells:[{v:0,d:[]}],type:'space'});
+      continue;
+    }
+    const cells=louisTextToCells(token, language, g)||[];
+    if(cells.length===0){
+      res.push({orig:token,label:token,cells:[],type:'unknown'});
+    }else{
+      res.push({orig:token,label:token,cells:cells.map(v=>({v,d:bitmaskToDots(v)})),type:'word'});
+    }
+  }
+  return res;
+}
+
 function textToCells(text, language){
   // 캐시 조회
   const cacheKey=`${language}:${grade}:${text}`;
@@ -3481,13 +3508,24 @@ function onTextInput(){
     allCells=[];allGraphicCells=[];updatePageUI();return;
   }
 
-  // breakdown display: convertText 구조(글자별 분해) 유지
-  // cellsDisplay + breakdown: 언어·등급별 정확한 결과 생성
-  // 한국어 G2: buildKoG2DisplayResult (어절 단위 braillify → 약자·약어 표시)
-  // 그 외: convertText (G1 raw 분해 / 영어 G1·G2 처리)
-  const displayResult=(lang==='ko'&&grade===2)
-    ? buildKoG2DisplayResult(text)
-    : convertText(text,lang);
+  // cellsDisplay + breakdown: 언어·등급별 정확한 엔진 선택
+  let displayResult;
+  if(lang==='ko' && grade===2){
+    // 한국어 G2: 어절 단위 braillify → 약자(13항)·약어(18항)
+    displayResult=buildKoG2DisplayResult(text);
+  } else if(lang==='ko'){
+    // 한국어 G1: raw 분해 (철자 그대로, 약자 미적용)
+    displayResult=convertText(text,lang);
+  } else if(lang==='en'){
+    // 영어: LibLouis 준비됐으면 LibLouis G1/G2, 아니면 내부 convertText/convertEnG2
+    displayResult=louisReady
+      ? buildLibLouisDisplayResult(text,'en',grade)
+      : convertText(text,lang);
+  } else {
+    // 프랑스어·독일어·아랍어 등: 특수문자·G2 약자 모두 LibLouis 필수
+    // LibLouis 미준비 시 convertText (기본 라틴 문자만 부분 표시)
+    displayResult=buildLibLouisDisplayResult(text,lang,grade);
+  }
   renderAll(displayResult);
 
   // allCells 추가 정합: textToCells (BLE 전송·페이지 계산용 정확 셀)
