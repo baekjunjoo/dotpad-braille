@@ -93,6 +93,43 @@ textarea::placeholder{color:#c8c6bc;}
   font-size:13px;font-weight:600;
   pointer-events:none;
 }
+/* ── 이미지 포함 방식 선택 모달 ───────────────────────────────── */
+.img-decision-overlay{
+  position:fixed;inset:0;background:rgba(20,20,19,.55);z-index:200;
+  display:flex;align-items:center;justify-content:center;padding:16px;
+}
+.img-decision-modal{
+  background:#fff;border-radius:16px;padding:0;max-width:520px;width:100%;
+  max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(20,20,19,.18);
+}
+.img-decision-header{padding:20px 22px 14px;border-bottom:1px solid #e8e6dc;}
+.img-decision-header h3{font-size:15px;font-weight:700;color:#141413;margin-bottom:4px;}
+.img-decision-header p{font-size:12px;color:#b0aea5;}
+.img-decision-list{overflow-y:auto;flex:1;padding:14px 22px;display:flex;flex-direction:column;gap:12px;}
+.img-decision-card{
+  display:flex;gap:12px;align-items:center;
+  padding:12px;background:#faf9f5;border:1.5px solid #e8e6dc;border-radius:10px;
+}
+.img-decision-card.ocr-ok{border-color:#c4d4a8;background:#eef4e8;}
+.img-thumb{width:72px;height:72px;object-fit:cover;border-radius:7px;flex-shrink:0;border:1px solid #e8e6dc;background:#f0ede8;}
+.img-decision-info{flex:1;min-width:0;}
+.img-decision-info .img-label{font-size:13px;font-weight:600;color:#141413;margin-bottom:4px;}
+.img-decision-info .img-status{font-size:11px;color:#b0aea5;}
+.img-dec-btns{display:flex;gap:6px;flex-shrink:0;}
+.img-dec-btn{
+  font-size:11px;font-weight:600;padding:5px 10px;border-radius:7px;border:1.5px solid #e8e6dc;
+  background:#fff;color:#788c5d;cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.img-dec-btn.active{background:#d97757;border-color:#d97757;color:#fff;}
+.img-dec-btn.skip-btn{color:#b0aea5;}
+.img-dec-btn.skip-btn.active{background:#b0aea5;border-color:#b0aea5;color:#fff;}
+.img-decision-footer{padding:14px 22px 18px;border-top:1px solid #e8e6dc;display:flex;justify-content:flex-end;}
+.img-decision-confirm{
+  background:#d97757;color:#fff;border:none;border-radius:9px;
+  padding:9px 24px;font-size:13px;font-weight:600;cursor:pointer;
+}
+.img-decision-confirm:hover{background:#c86848;}
+
 /* 파일 불러오기 전 언어·등급 선택 옵션 영역 */
 .drop-options{
   display:flex;align-items:center;gap:10px;flex-wrap:wrap;
@@ -458,6 +495,20 @@ textarea::placeholder{color:#c8c6bc;}
   <div class="pdf-loading" id="pdfLoading" style="display:none">
     <div class="spin"></div>
     <span id="pdfLoadingText">PDF 불러오는 중...</span>
+  </div>
+
+  <!-- 이미지 포함 방식 선택 모달 (DOCX/PDF 이미지 처리 시 표시) -->
+  <div id="imgDecisionOverlay" class="img-decision-overlay" style="display:none" role="dialog" aria-modal="true">
+    <div class="img-decision-modal">
+      <div class="img-decision-header">
+        <h3>📷 이미지 포함 방식 선택</h3>
+        <p>텍스트를 감지하지 못한 이미지입니다. 각 이미지를 닷패드에 포함할지 선택하세요.</p>
+      </div>
+      <div class="img-decision-list" id="imgDecisionList"></div>
+      <div class="img-decision-footer">
+        <button class="img-decision-confirm" onclick="confirmImageDecisions()">✓ 확인</button>
+      </div>
+    </div>
   </div>
 
   <!-- PDF loaded state -->
@@ -1749,6 +1800,81 @@ async function loadTxt(file){
   }
 }
 
+// ============================================================
+// 이미지 포함 방식 선택 모달
+// ============================================================
+
+/** 이미지에 빠른 OCR 시도 — 텍스트 감지 여부 반환 */
+async function quickOcrCheck(imgSrc){
+  if(typeof Tesseract==='undefined') return {hasText:false, text:''};
+  try{
+    const lang=pdfLang==='ko'?'kor+eng':'eng';
+    const result=await Tesseract.recognize(imgSrc, lang, {logger:()=>{}});
+    const text=(result.data.text||'').trim();
+    // 의미있는 단어가 5개 이상 && 총 글자 30자 이상 → 텍스트 이미지
+    const words=text.split(/\s+/).filter(w=>w.length>=2);
+    return {hasText: words.length>=5 && text.length>=30, text};
+  }catch(e){
+    return {hasText:false, text:''};
+  }
+}
+
+// 모달 결정 콜백 저장
+let _imgDecisionResolve=null;
+const _imgDecisions=[]; // [{imgSrc, ocrText, action: 'image'|'skip'}]
+
+/**
+ * 이미지 포함 방식 선택 모달 표시
+ * items: [{imgSrc, label, ocrText}]
+ * 반환: Promise<Array<{imgSrc, action}>>
+ */
+function showImageDecisionModal(items){
+  return new Promise(resolve=>{
+    _imgDecisionResolve=resolve;
+    _imgDecisions.length=0;
+    items.forEach((item,i)=>{
+      _imgDecisions.push({imgSrc:item.imgSrc, ocrText:item.ocrText, action:'image'});
+    });
+
+    const list=document.getElementById('imgDecisionList');
+    list.innerHTML=items.map((item,i)=>`
+      <div class="img-decision-card" id="imgCard_${i}">
+        <img class="img-thumb" src="${item.imgSrc}" alt="이미지 ${i+1}">
+        <div class="img-decision-info">
+          <div class="img-label">${item.label}</div>
+          <div class="img-status">텍스트 미감지 — 포함 방식 선택</div>
+        </div>
+        <div class="img-dec-btns">
+          <button class="img-dec-btn active" onclick="setImgDecision(${i},'image')">🖼 이미지</button>
+          <button class="img-dec-btn skip-btn" onclick="setImgDecision(${i},'skip')">✕ 제외</button>
+        </div>
+      </div>`).join('');
+
+    document.getElementById('imgDecisionOverlay').style.display='flex';
+  });
+}
+
+/** 개별 이미지 결정 토글 */
+function setImgDecision(idx, action){
+  _imgDecisions[idx].action=action;
+  const card=document.getElementById(`imgCard_${idx}`);
+  if(!card) return;
+  card.querySelectorAll('.img-dec-btn').forEach(btn=>{
+    const isMatch=(action==='image' && btn.textContent.includes('이미지'))
+                ||(action==='skip'  && btn.textContent.includes('제외'));
+    btn.classList.toggle('active', isMatch);
+  });
+}
+
+/** 확인 버튼 클릭 → 모달 닫고 결과 반환 */
+function confirmImageDecisions(){
+  document.getElementById('imgDecisionOverlay').style.display='none';
+  if(_imgDecisionResolve){
+    _imgDecisionResolve([..._imgDecisions]);
+    _imgDecisionResolve=null;
+  }
+}
+
 /** DOCX 로더 (mammoth.js 사용) — 텍스트 + 이미지 동시 추출 */
 async function loadDocx(file){
   if(typeof mammoth==='undefined'){addLog('err','mammoth.js 로드 실패 — 인터넷 연결을 확인하세요');return;}
@@ -1770,23 +1896,54 @@ async function loadDocx(file){
     const imgEls=Array.from(htmlDoc.querySelectorAll('img[src^="data:image"]'));
     addLog('info',`DOCX 분석: 텍스트 ${text.length}자, 이미지 ${imgEls.length}개 감지`);
 
-    // ── OCR fallback: 텍스트 거의 없고 이미지만 있는 경우 ──
-    if(text.length<10 && imgEls.length>0){
-      addLog('info','텍스트 없음 → 이미지 OCR 시도 중...');
+    // ── [Step 2] 이미지별 OCR 스크리닝 ─────────────────────────────
+    // OCR 성공 → 텍스트 자동 포함 / OCR 실패 → 사용자 선택
+    const ocrAutoTexts=[];  // OCR 성공 이미지 텍스트 (기존 text에 병합)
+    const pendingImgs=[];   // 사용자 선택 필요 이미지
+
+    for(let i=0;i<imgEls.length;i++){
+      showPdfLoading(`이미지 분석 중... (${i+1}/${imgEls.length})`);
+      const check=await quickOcrCheck(imgEls[i].src);
+      if(check.hasText){
+        // 텍스트 이미지: OCR 결과 자동 포함
+        ocrAutoTexts.push(check.text);
+        addLog('info',`✓ 이미지 ${i+1}: 텍스트 감지 → OCR 자동 포함`);
+      }else{
+        // 사진/도형: 사용자 선택 대기
+        pendingImgs.push({imgSrc:imgEls[i].src, label:`이미지 ${i+1}`, ocrText:''});
+      }
+    }
+
+    // OCR fallback: 텍스트 전혀 없고 OCR 자동 텍스트도 없는 경우
+    if(text.length<10 && ocrAutoTexts.length===0 && imgEls.length>0){
+      addLog('info','텍스트 없음 → 전체 이미지 OCR 재시도...');
       try{ text=await ocrDocxImages(arrayBuffer); }
       catch(e){ console.warn('[OCR] DOCX OCR 실패:',e); text=''; }
     }
 
-    // ── [Step 2+3] 이미지 전처리 → 도트 셀 변환 ──
-    const imagePages=[];
-    for(let i=0;i<imgEls.length;i++){
-      showPdfLoading(`이미지 처리 중... (${i+1}/${imgEls.length})`);
-      try{
-        const dots=await imgSrcToDotCells(imgEls[i].src);
-        imagePages.push({type:'image', dots});
-        addLog('info',`✓ 이미지 ${i+1} 촉각 변환 완료`);
-      }catch(e){
-        console.warn(`[Image] DOCX 이미지 ${i+1} 처리 실패:`,e);
+    // OCR 성공 이미지 텍스트를 기존 텍스트에 병합
+    if(ocrAutoTexts.length>0){
+      const ocr=ocrAutoTexts.join('\n\n');
+      text=text?(text+'\n\n'+ocr):ocr;
+    }
+
+    // ── [Step 3] 사진 이미지 → 사용자 결정 모달 ─────────────────
+    let imagePages=[];
+    if(pendingImgs.length>0){
+      hidePdfLoading();
+      addLog('info',`📷 사진 ${pendingImgs.length}개 — 포함 방식를 선택해 주세요`);
+      const decisions=await showImageDecisionModal(pendingImgs);
+      showPdfLoading('이미지 처리 중...');
+
+      for(const d of decisions){
+        if(d.action==='image'){
+          try{
+            const dots=await imgSrcToDotCells(d.imgSrc);
+            imagePages.push({type:'image', dots});
+            addLog('info','✓ 이미지 촉각 변환 완료');
+          }catch(e){ console.warn('[Image] 변환 실패:',e); }
+        }
+        // action==='skip' → 제외
       }
     }
 
