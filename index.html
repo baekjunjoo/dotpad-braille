@@ -1504,21 +1504,58 @@ const _cellCache=new Map(); // 변환 결과 메모이제이션 (key: "lang:grad
 const _CELL_CACHE_MAX=200;  // 최대 항목 수 (LRU-lite: 초과 시 가장 오래된 항목 제거)
 const _brfHintsCache=new Map(); // BRF 역번역 힌트 캐시 (key: "pageNum:lang:grade")
 
+/**
+ * 한국어 G2 약어 전처리: KO_G2_WORD_MAP 단어를 약어형으로 치환 후 braillify 인코딩
+ * 예) '그래서' → '서' → braillify 인코딩 (약자 포함)
+ * 전체 텍스트 흐름을 유지하면서 단어 단위만 치환
+ */
+function applyKoG2WordMap(text){
+  let result=''; let i=0;
+  while(i<text.length){
+    let matched=false;
+    for(const [orig,abbrev] of KO_G2_WORD_MAP){
+      if(text.startsWith(orig,i)){
+        result+=abbrev; i+=orig.length; matched=true; break;
+      }
+    }
+    if(!matched){result+=text[i];i++;}
+  }
+  return result;
+}
+
 function textToCells(text, language){
-  // 캐시 조회 — 엔진 종류 불문 공통 적용 (fix: braillify/LibLouis 경로도 캐시)
+  // 캐시 조회 — 엔진 종류 불문 공통 적용
   const cacheKey=`${language}:${grade}:${text}`;
   if(_cellCache.has(cacheKey)) return _cellCache.get(cacheKey);
 
   let cells=null;
 
-  // ① braillify — 한국어 G1 전용 (braillify는 grade 파라미터 없이 항상 G1 출력)
-  //    G2 한국어는 ②LibLouis ko-g2.ctb로 처리
-  if(braillifyReady && text && language==='ko' && grade===1){
-    cells=braillifyTranslate(text);
+  // ── 한국어 ──────────────────────────────────────────────────────
+  // G2 = 약자·약어 사용: KO_G2_WORD_MAP 전처리 → braillify (13항 약자 + 18항 약어)
+  // G1 = 철자 그대로: 내장 raw 변환기 (CHOSEONG/JUNGSEONG/JONGSEONG 직접 분해)
+  //      LibLouis ko-g1.ctb는 약자를 적용할 수 있으므로 한국어에는 사용하지 않음
+  if(language==='ko'){
+    if(grade===2 && braillifyReady && text){
+      cells=braillifyTranslate(applyKoG2WordMap(text));
+    }
+    // G1: cells===null 상태로 유지 → 아래 LibLouis 분기 건너뜀 → 내장 fallback 사용
+    if(cells!==null){
+      if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
+      _cellCache.set(cacheKey, cells);
+      return cells;
+    }
+    // G1 Korean → 내장 convertText fallback으로 낙하 (아래 LibLouis 분기 건너뜀)
+    const koRes=convertText(text, 'ko'); // grade=1이면 raw 분해
+    const koCells=[];
+    for(const item of koRes) for(const c of item.cells) koCells.push(c.v);
+    if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
+    _cellCache.set(cacheKey, koCells);
+    return koCells;
   }
-  // ② LibLouis — G2 한국어 / 영어 / 다국어 & 초기화 완료 시
+
+  // ── 영어/다국어: LibLouis (grade 반영 — en-ueb-g1.ctb / en-ueb-g2.ctb 등) ─
   if(cells===null && louisReady && text && LOUIS_TABLES[language]){
-    cells=louisTextToCells(text, language, grade); // 전역 grade 그대로 전달 (ko-g2.ctb 등)
+    cells=louisTextToCells(text, language, grade);
   }
   if(cells!==null){
     if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
