@@ -3238,25 +3238,103 @@ function looksLikeRealText(text){
   return words.length>=5;
 }
 
+// ── PDF 수식 보조 함수 ──────────────────────────────────────────────
+
+/** 문자열을 유니코드 위첨자로 변환 */
+const _SUP_MAP={'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',
+               '+':'⁺','-':'⁻','=':'⁼','(':'^(',')':'^)','n':'ⁿ','a':'ᵃ','b':'ᵇ','x':'ˣ','i':'ⁱ'};
+/** 문자열을 유니코드 아래첨자로 변환 */
+const _SUB_MAP={'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',
+               '+':'₊','-':'₋','=':'₌','n':'ₙ','a':'ₐ','e':'ₑ','i':'ᵢ','j':'ⱼ','x':'ₓ'};
+function _toSup(s){ return [...s].map(c=>_SUP_MAP[c]||c).join(''); }
+function _toSub(s){ return [...s].map(c=>_SUB_MAP[c]||c).join(''); }
+
+/**
+ * 옵션 C: 화학식 / 수식 패턴 보정
+ * Y좌표 분석으로 미포착된 아래첨자/위첨자를 패턴으로 추가 변환
+ * - 원소기호 바로 뒤 숫자: H2O → H₂O
+ * - 닫는 괄호 뒤 숫자: Cu(NO3)2 → Cu(NO₃)₂
+ * - 이온 전하: 2+ → ²⁺
+ * - 반응 화살표 정규화: --> → →
+ */
+function fixChemicalPatterns(text){
+  // 원소기호+숫자 → 아래첨자 (공백 없이 붙어있을 때만)
+  text=text.replace(/([A-Z][a-z]?)([0-9]+)(?=[^0-9a-z]|$)/g,
+    (_,elem,num)=>elem+_toSub(num));
+  // 닫는괄호+숫자 → 아래첨자
+  text=text.replace(/\)([0-9]+)/g, (_,n)=>')'+_toSub(n));
+  // 이온 전하 표기: Cu2+ → Cu²⁺
+  text=text.replace(/([0-9]?)([+\-])(?=\s|$|[,;).\n])/g,
+    (_,n,s)=>(n?_toSup(n):'')+(n?_toSup(s):s));
+  // 반응 화살표 정규화
+  text=text.replace(/--+>/g,'→').replace(/={2,}>/g,'⇒');
+  return text;
+}
+
 async function getPdfPageText(pageNum){
   // fix: 빈 문자열('')은 falsy → 캐시 히트 누락. undefined 체크로 변경
   if(pdfPageTexts[pageNum]!==undefined) return pdfPageTexts[pageNum];
   const page=await pdfDoc.getPage(pageNum);
   const content=await page.getTextContent();
-  // 텍스트 아이템을 이어붙이되 줄바꿈 보존
+
+  // ── 옵션 A: Y좌표 기반 위첨자·아래첨자 감지 ───────────────────────
+  // PDF.js의 각 텍스트 아이템에서 (x, y, height) 추출 → 줄 그룹화 → 첨자 판별
+  const rawItems=content.items
+    .filter(i=>'str' in i && i.str)
+    .map(i=>({
+      str:  i.str,
+      x:    i.transform[4],
+      y:    i.transform[5],               // PDF좌표: 아래↑위 (subscript = 더 낮은 Y)
+      h:    i.height||Math.abs(i.transform[0])||10,  // 폰트 크기
+    }));
+
   let text='';
-  let lastY=null;
-  for(const item of content.items){
-    if('str' in item){
-      // y 좌표 변화가 크면 줄바꿈
-      const y=item.transform?item.transform[5]:null;
-      if(lastY!==null&&y!==null&&Math.abs(y-lastY)>5&&text.length>0){
-        if(!text.endsWith('\n')) text+='\n';
+
+  if(rawItems.length>0){
+    const avgH=rawItems.reduce((s,i)=>s+i.h,0)/rawItems.length;
+    const LINE_GAP=avgH*0.65; // 동일 줄 허용 Y편차
+
+    // Y 내림차순 정렬 (위 줄 → 아래 줄)
+    const sorted=[...rawItems].sort((a,b)=>b.y-a.y);
+
+    // 줄 그룹화
+    const lines=[];
+    let curLine=[sorted[0]], curY=sorted[0].y;
+    for(let i=1;i<sorted.length;i++){
+      if(Math.abs(sorted[i].y-curY)<LINE_GAP) curLine.push(sorted[i]);
+      else{ lines.push(curLine); curLine=[sorted[i]]; curY=sorted[i].y; }
+    }
+    lines.push(curLine);
+
+    for(const line of lines){
+      // X순서로 정렬 (왼→오)
+      line.sort((a,b)=>a.x-b.x);
+
+      // 줄의 주요 Y·높이 계산 (큰 글자 기준)
+      const main=line.filter(i=>i.h>avgH*0.7);
+      const mainY=(main.length?main:line).reduce((s,i)=>s+i.y,0)/(main.length||line.length);
+      const mainH=(main.length?main:line).reduce((s,i)=>s+i.h,0)/(main.length||line.length);
+
+      // 첨자 감지 임계값: 주요 폰트 크기의 20-25%
+      const SUP_THR=mainH*0.25;
+      const SUB_THR=mainH*0.20;
+      const SZ_THR =0.85; // 크기 비율 임계 (이보다 작으면 첨자로 간주)
+
+      let row='';
+      for(const item of line){
+        const dy=item.y-mainY;
+        const sr=item.h/mainH;
+        if(dy>SUP_THR && sr<SZ_THR)        row+=_toSup(item.str); // 위첨자
+        else if(dy<-SUB_THR && sr<SZ_THR)  row+=_toSub(item.str); // 아래첨자
+        else                                row+=item.str;
       }
-      text+=item.str;
-      lastY=y;
+      text+=(text&&!text.endsWith('\n')?'\n':'')+row;
     }
   }
+
+  // 옵션 C: 화학식 패턴 보정 (Y좌표 분석 미포착 케이스 보완)
+  text=fixChemicalPatterns(text);
+
   // 정리: 과도한 공백·줄바꿈 제거
   text=text.replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim();
 
