@@ -529,7 +529,6 @@ textarea::placeholder{color:#c8c6bc;}
             <option value="de">🇩🇪 Deutsch</option>
             <option value="es">🇪🇸 Español</option>
             <option value="ar">🇸🇦 العربية</option>
-            <option value="math">➗ 수학(Nemeth)</option>
           </select>
         </div>
         <div class="fld-row">
@@ -1695,7 +1694,14 @@ function textToCells(text, language){
 
   let cells=null;
 
-  // ── 수학(Nemeth) ─────────────────────────────────────────────────
+  // ── Nemeth 사전 변환된 유니코드 점자 pass-through ──────────────────
+  // Nemeth 변환 결과(U+2800-U+28FF)를 그대로 셀 배열로 반환
+  if(text && [...text].every(c=>{const n=c.charCodeAt(0);return n>=0x2800&&n<=0x28FF;})){
+    const cells=[...text].map(c=>c.charCodeAt(0)-0x2800);
+    if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
+    _cellCache.set(cacheKey,cells); return cells;
+  }
+  // ── 수학(Nemeth) — 언어 셀렉터 비노출, 내부 엔진용 ──────────────────
   if(language==='math'){
     const nc=louisTextToCells(text,'math',1);
     if(nc){
@@ -1908,9 +1914,10 @@ function extractOmmlEquations(xmlText){
 /**
  * 혼합 텍스트에서 $...$, $$...$$ LaTeX 수식 추출 및 Nemeth 변환
  * 수식이 없으면 원래 텍스트 그대로 반환
+ * @returns {cells, inlineText} cells: 점자 셀 배열, inlineText: 수식이 ⠤...⠤로 표시된 텍스트
  */
 function processTextWithNemeth(text, baseLang){
-  if(!louisReady) return null; // LibLouis 미준비
+  if(!louisReady) return null;
   const mathPat=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g;
   let hasMath=false;
   const segments=[];
@@ -1919,23 +1926,104 @@ function processTextWithNemeth(text, baseLang){
     hasMath=true;
     if(m.index>lastIdx) segments.push({type:'text',content:text.slice(lastIdx,m.index)});
     const inner=m[0].replace(/^\$\$|\$\$$/g,'').replace(/^\$|\$$/g,'').trim();
-    segments.push({type:'math',content:latexToUnicodeForNemeth(inner)});
+    segments.push({type:'math',content:latexToUnicodeForNemeth(inner), orig:inner});
     lastIdx=m.index+m[0].length;
   }
-  if(!hasMath) return null; // 수식 없음 → 일반 처리
+  if(!hasMath) return null;
   if(lastIdx<text.length) segments.push({type:'text',content:text.slice(lastIdx)});
 
   const cells=[];
+  let inlineText='';
   for(const seg of segments){
     if(seg.type==='math'){
       const mc=louisTextToCells(seg.content,'math',1);
-      if(mc) cells.push(...mc);
+      if(mc){
+        cells.push(...mc);
+        // 유니코드 점자로 inline 텍스트에 포함
+        inlineText+=mc.map(v=>String.fromCodePoint(0x2800+v)).join('');
+      }
     }else if(seg.content.trim()){
-      const tc=louisTextToCells(seg.content,baseLang,1)||[];
-      cells.push(...tc);
+      const tc=louisTextToCells(seg.content,baseLang,grade)||[];
+      cells.push(...tc); inlineText+=seg.content;
+    }else{
+      inlineText+=seg.content;
     }
   }
-  return cells.length>0?cells:null;
+  return cells.length>0?{cells,inlineText}:null;
+}
+
+/**
+ * [NEM:unicode] 마커를 실제 Nemeth 점자 유니코드 문자열로 해소
+ * LibLouis 미준비 시 "수식(unicode) " 텍스트로 대체
+ */
+function resolveNemethMarkers(text){
+  return text.replace(/\[NEM:([^\]]+)\]/g,(_, unicode)=>{
+    if(!louisReady) return `수식(${unicode}) `;
+    const cells=louisTextToCells(unicode,'math',1);
+    if(!cells||cells.length===0) return unicode;
+    return cells.map(v=>String.fromCodePoint(0x2800+v)).join('');
+  });
+}
+
+/**
+ * DOCX document.xml 전체 파싱 — 표·수식 구조 보존
+ * mammoth와 독립적으로 동작, 수식(oMath)을 [NEM:...] 마커로 삽입
+ */
+function parseDocxWithMath(xmlText){
+  const parser=new DOMParser();
+  const xmlDoc=parser.parseFromString(xmlText,'application/xml');
+  const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const M='http://schemas.openxmlformats.org/officeDocument/2006/math';
+
+  function getTag(n){return n.localName||n.tagName?.split(':').pop()||'';}
+
+  function processPara(p){
+    let s='';
+    for(const child of p.childNodes){
+      const tag=getTag(child);
+      if(tag==='r'){
+        const ts=Array.from(child.getElementsByTagNameNS(W,'t'));
+        ts.forEach(t=>{ s+=t.textContent||''; });
+      }else if(tag==='oMath'||tag==='oMathPara'){
+        const raw=ommlNodeToText(child);
+        const uni=latexToUnicodeForNemeth(raw);
+        if(uni.trim()) s+=`[NEM:${uni}]`;
+      }else if(tag==='hyperlink'||tag==='ins'){
+        s+=processPara(child);
+      }
+    }
+    return s;
+  }
+
+  function processTable(tbl){
+    let t='';
+    const rows=Array.from(tbl.getElementsByTagNameNS(W,'tr'));
+    rows.forEach((row,ri)=>{
+      const cells=Array.from(row.getElementsByTagNameNS(W,'tc'));
+      cells.forEach((cell,ci)=>{
+        const paras=Array.from(cell.getElementsByTagNameNS(W,'p'));
+        const txt=paras.map(p=>processPara(p).trim()).filter(Boolean).join(' ');
+        if(txt) t+=`${ri+1}행 ${ci+1}열 ${txt}\n`;
+      });
+      t+='\n';
+    });
+    return t;
+  }
+
+  let result='';
+  const body=xmlDoc.getElementsByTagNameNS(W,'body')[0];
+  if(!body) return '';
+
+  for(const child of body.childNodes){
+    const tag=getTag(child);
+    if(tag==='p'){
+      const s=processPara(child);
+      if(s.trim()) result+=s+'\n';
+    }else if(tag==='tbl'){
+      result+=processTable(child);
+    }
+  }
+  return result.replace(/\n{3,}/g,'\n\n').trim();
 }
 
 /** 파일 선택 시 설정 다이얼로그 표시 */
@@ -2280,25 +2368,46 @@ async function loadDocx(file){
   try{
     const arrayBuffer=await file.arrayBuffer();
 
-    // ── [Step 1] HTML 변환 + 구조화 텍스트 추출 (표·이미지 위치 보존) ──
-    // RISK-06 fix: slice(0) 복사본
-    const [textResult, htmlResult]=await Promise.all([
+    // ── [Step 1] document.xml 파싱(수식 인라인) + HTML(이미지) 병렬 처리 ──
+    // document.xml: 표·수식(oMath)→[NEM:...] 마커 포함 텍스트
+    // HTML: 이미지 <<IMG_N>> 플레이스홀더 포함
+    const [textResult, htmlResult, xmlText]=await Promise.all([
       mammoth.extractRawText({arrayBuffer}),
-      mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)})
+      mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)}),
+      (async()=>{
+        if(typeof JSZip==='undefined') return null;
+        try{
+          const z=await JSZip.loadAsync(arrayBuffer.slice(0));
+          const f=z.file('word/document.xml');
+          return f ? await f.async('text') : null;
+        }catch(e){ return null; }
+      })()
     ]);
     const parser=new DOMParser();
     const htmlDoc=parser.parseFromString(htmlResult.value,'text/html');
 
-    // extractStructuredTextFromHtml: 표·이미지 위치에 플레이스홀더 삽입
-    // 이미지 위치: <<IMG1>>, <<IMG2>>... → 나중에 "이미지 N\n[내용]"으로 교체
-    let text=extractStructuredTextFromHtml(htmlDoc);
-    // 구조화 텍스트가 너무 짧으면 rawText fallback
-    if(text.replace(/<<IMG\d+>>/g,'').trim().length<10)
+    // 텍스트 추출 우선순위:
+    // 1) document.xml → 표·수식 인라인 [NEM:...] 마커 포함 (가장 정확)
+    // 2) extractStructuredTextFromHtml → HTML 기반 (mammoth, 이미지 플레이스홀더 포함)
+    // 3) rawText fallback
+    let text='';
+    let hasMathInDoc=false;
+    if(xmlText){
+      text=parseDocxWithMath(xmlText);
+      hasMathInDoc=/\[NEM:/.test(text);
+      // 이미지 플레이스홀더 <<IMG_N>>는 HTML 기반 text에 있음 → 병합
+      // xmlText 텍스트에는 이미지가 없으므로 HTML 플레이스홀더를 추가로 처리
+    }
+    if(!text||text.length<10){
+      text=extractStructuredTextFromHtml(htmlDoc);
+    }
+    if(!text||text.replace(/<<IMG\d+>>/g,'').trim().length<10){
       text=textResult.value.trim();
+    }
 
     const imgEls=Array.from(htmlDoc.querySelectorAll('img[src^="data:image"]'));
     const hasTables=htmlDoc.querySelector('table')!==null;
-    addLog('info',`DOCX 분석: ${text.length}자${hasTables?' (표 포함)':''}, 이미지 ${imgEls.length}개`);
+    addLog('info',`DOCX 분석: ${text.length}자${hasTables?' (표)':''}${hasMathInDoc?' (수식 감지 → Nemeth 적용)':''}, 이미지 ${imgEls.length}개`);
 
     // ── [Step 2] 이미지별 OCR 스크리닝 ─────────────────────────────
     // imgEls[i] ↔ 플레이스홀더 <<IMG(i+1)>> 1:1 대응
@@ -2355,28 +2464,16 @@ async function loadDocx(file){
     for(const [ph,repl] of Object.entries(imgReplacements)){
       text=text.replace(ph, repl ? '\n'+repl+'\n' : '');
     }
-    // 처리되지 않은 플레이스홀더 제거
+    // 처리되지 않은 이미지 플레이스홀더 제거
     text=text.replace(/<<IMG\d+>>/g,'').replace(/\n{3,}/g,'\n\n').trim();
 
-    // ── [Step 5] OMML 수식 추출 (Nemeth 변환) ─────────────────────
-    // JSZip으로 word/document.xml에서 <m:oMath> 수식 직접 추출
-    if(typeof JSZip!=='undefined' && louisReady){
-      try{
-        const zipMath=await JSZip.loadAsync(arrayBuffer.slice(0));
-        const docXmlFile=zipMath.file('word/document.xml');
-        if(docXmlFile){
-          showPdfLoading('수식 추출 중...');
-          const docXml=await docXmlFile.async('text');
-          const eqs=extractOmmlEquations(docXml);
-          if(eqs.length>0){
-            // 수식들을 "수식 N: [Nemeth 점자 유니코드 표현]" 형식으로 문서 끝에 추가
-            // (현재는 수식 위치 매핑 대신 요약 섹션으로 추가 — 향후 위치 매핑 개선 가능)
-            const mathSection=eqs.map(e=>`수식 ${e.idx}: ${e.unicode}`).join('\n');
-            text=text?text+'\n\n수식 목록\n'+mathSection:mathSection;
-            addLog('ok',`✓ OMML 수식 ${eqs.length}개 추출 → Nemeth 변환`);
-          }
-        }
-      }catch(e){ console.warn('[OMML] 수식 추출 실패:',e); }
+    // ── [Step 5] [NEM:...] 마커 → Nemeth 점자 유니코드 인라인 변환 ──
+    // parseDocxWithMath가 삽입한 수식 마커를 실제 Nemeth 점자 문자로 교체
+    // textToCells의 pass-through로 점자 셀 배열에 직접 포함됨
+    if(hasMathInDoc){
+      text=resolveNemethMarkers(text);
+      if(louisReady) addLog('ok','✓ 수식 Nemeth 변환 완료 → 점자 흐름에 인라인 삽입');
+      else addLog('info','LibLouis 로드 후 수식이 Nemeth로 표시됩니다');
     }
 
     // 텍스트도 없고 이미지 처리도 실패하면 에러
@@ -4097,28 +4194,29 @@ function onTextInput(){
     allCells=[];allGraphicCells=[];updatePageUI();return;
   }
 
+  // ── $...$ 수식 자동 감지 → Nemeth 인라인 변환 ──────────────────
+  // 텍스트에 $LaTeX$ 패턴이 있으면 해당 부분을 Nemeth 점자 유니코드로 교체
+  const mathResult=processTextWithNemeth(text, lang);
+  const displayText = mathResult ? mathResult.inlineText : text;
+  const hasMathInput = !!mathResult;
+
   // cellsDisplay + breakdown: 언어·등급별 정확한 엔진 선택
   let displayResult;
   if(lang==='ko' && grade===2){
-    // 한국어 G2: 어절 단위 braillify → 약자(13항)·약어(18항)
-    displayResult=buildKoG2DisplayResult(text);
+    displayResult=buildKoG2DisplayResult(displayText);
   } else if(lang==='ko'){
-    // 한국어 G1: raw 분해 (철자 그대로, 약자 미적용)
-    displayResult=convertText(text,lang);
+    displayResult=convertText(displayText,lang);
   } else if(lang==='en'){
-    // 영어: LibLouis 준비됐으면 LibLouis G1/G2, 아니면 내부 convertText/convertEnG2
     displayResult=louisReady
-      ? buildLibLouisDisplayResult(text,'en',grade)
-      : convertText(text,lang);
+      ? buildLibLouisDisplayResult(displayText,'en',grade)
+      : convertText(displayText,lang);
   } else {
-    // 프랑스어·독일어·아랍어 등: 특수문자·G2 약자 모두 LibLouis 필수
-    // LibLouis 미준비 시 convertText (기본 라틴 문자만 부분 표시)
-    displayResult=buildLibLouisDisplayResult(text,lang,grade);
+    displayResult=buildLibLouisDisplayResult(displayText,lang,grade);
   }
   renderAll(displayResult);
 
-  // allCells 추가 정합: textToCells (BLE 전송·페이지 계산용 정확 셀)
-  const properCells=textToCells(text,lang);
+  // allCells: 수식이 있으면 Nemeth 인라인 셀, 없으면 일반
+  const properCells=hasMathInput ? mathResult.cells : textToCells(text,lang);
   if(properCells && properCells.length>0){
     allCells=[...properCells];
     allGraphicCells=[...properCells];
