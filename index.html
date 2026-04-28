@@ -1852,25 +1852,100 @@ function onFileSelect(e){
  * 전체 텍스트를 브레일 셀 기준으로 페이지 분할
  * 300셀 그래픽 영역에 맞게, 단락 경계를 최대한 보존
  */
+/**
+ * DOCX HTML에서 표 구조를 보존하며 텍스트 추출 (NVDA 스크린리더 방식)
+ * 표 셀: "N행 M열 내용" 형식으로 레이블링 → 브레일 출력 시 위치 파악 가능
+ * 일반 단락·제목은 줄바꿈 보존
+ */
+function extractStructuredTextFromHtml(htmlDoc){
+  const parts=[];
+
+  function processTable(tbl){
+    const rows=Array.from(tbl.querySelectorAll('tr'));
+    const totalRows=rows.length;
+    rows.forEach((row,ri)=>{
+      const cells=Array.from(row.querySelectorAll('td,th'));
+      cells.forEach((cell,ci)=>{
+        const txt=cell.textContent.replace(/\s+/g,' ').trim();
+        if(txt) parts.push(`${ri+1}행 ${ci+1}열 ${txt}\n`);
+      });
+      if(ri<totalRows-1) parts.push('\n'); // 행 사이 빈 줄
+    });
+    parts.push('\n');
+  }
+
+  function walk(node){
+    if(node.nodeType===3){
+      const t=node.textContent;
+      if(t) parts.push(t);
+      return;
+    }
+    if(node.nodeType!==1) return;
+    const tag=node.tagName.toLowerCase();
+    if(['script','style','head'].includes(tag)) return;
+    if(tag==='table'){processTable(node);return;} // 표는 별도 처리, 재귀 안 함
+    if(tag==='br'){parts.push('\n');return;}
+    if(tag==='p'||/^h[1-6]$/.test(tag)){walkChildren(node);parts.push('\n');return;}
+    if(tag==='li'){parts.push('• ');walkChildren(node);parts.push('\n');return;}
+    walkChildren(node);
+  }
+
+  function walkChildren(node){for(const c of node.childNodes)walk(c);}
+  walkChildren(htmlDoc.body||htmlDoc.documentElement);
+
+  return parts.join('').replace(/\n{3,}/g,'\n\n').trim();
+}
+
 function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
-  // 단어 단위로 페이지를 최대한 꽉 채움 (빈 줄 경계 무시하고 greedy packing)
-  const words=fullText.replace(/\r/g,'').split(/\s+/).filter(w=>w);
+  // 단락(줄바꿈) 경계를 보존하면서 300셀 단위로 페이지 분할
+  // ★ 수정 이유: 기존 \s+ 분리는 표 셀 경계의 줄바꿈을 모두 삭제해 내용이 중간에 끊김
+  const lines=fullText.replace(/\r/g,'').split('\n');
   const pages=[];
   let buf='', bufCells=0;
 
-  for(const w of words){
-    const wc=textToCells(w, lang).length;
-    if(!wc) continue;
-    const space=(bufCells>0?1:0);
-    if(bufCells+space+wc<=cellsPerPage){
-      buf+=(buf?' ':'')+w;
-      bufCells+=space+wc;
+  function flushBuf(){if(buf.trim()){pages.push(buf.trim());} buf=''; bufCells=0;}
+
+  function addToken(token, cells){
+    if(cells===0) return; // 점자 셀 없는 토큰은 건너뜀
+    const space=bufCells>0?1:0;
+    if(bufCells+space+cells<=cellsPerPage){
+      buf+=(buf?' ':'')+token; bufCells+=space+cells;
     } else {
-      if(buf) pages.push(buf);
-      buf=w; bufCells=wc;
+      // 현재 페이지 확정
+      flushBuf();
+      // 한 토큰이 cellsPerPage 초과 → 강제 분할
+      if(cells>cellsPerPage){
+        const rawCells=textToCells(token,lang);
+        let chunk='', chunkCells=0;
+        // 문자 단위로 분할 (CJK 1문자 = n셀)
+        for(const ch of token){
+          const cc=textToCells(ch,lang).length||1;
+          if(chunkCells+cc>cellsPerPage&&chunk){
+            pages.push(chunk.trim()); chunk=''; chunkCells=0;
+          }
+          chunk+=ch; chunkCells+=cc;
+        }
+        if(chunk.trim()) pages.push(chunk.trim());
+      } else {
+        buf=token; bufCells=cells;
+      }
     }
   }
-  if(buf) pages.push(buf);
+
+  for(const line of lines){
+    const trimmed=line.trim();
+    if(!trimmed){
+      // 빈 줄 = 단락 경계 → 현재 버퍼 페이지 확정
+      flushBuf();
+      continue;
+    }
+    const words=trimmed.split(/\s+/).filter(w=>w);
+    for(const w of words){
+      const wc=textToCells(w,lang).length;
+      addToken(w, wc);
+    }
+  }
+  flushBuf();
   return pages.length?pages:['(내용 없음)'];
 }
 
@@ -2020,13 +2095,18 @@ async function loadDocx(file){
       mammoth.extractRawText({arrayBuffer}),
       mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)})
     ]);
-    let text=textResult.value.trim();
-
-    // ── [Step 1] 임베디드 이미지 추출 ──
+    // ── [Step 1] HTML 파싱 — 표 구조 보존 텍스트 추출 + 이미지 추출 ──
     const parser=new DOMParser();
     const htmlDoc=parser.parseFromString(htmlResult.value,'text/html');
+
+    // 표가 있으면 구조화 텍스트 사용 (N행 M열 레이블), 없으면 rawText fallback
+    const hasTables=htmlDoc.querySelector('table')!==null;
+    let text = hasTables
+      ? extractStructuredTextFromHtml(htmlDoc)  // 표 구조 보존 (NVDA 방식)
+      : textResult.value.trim();                 // 일반 문서: rawText 그대로
+
     const imgEls=Array.from(htmlDoc.querySelectorAll('img[src^="data:image"]'));
-    addLog('info',`DOCX 분석: 텍스트 ${text.length}자, 이미지 ${imgEls.length}개 감지`);
+    addLog('info',`DOCX 분석: 텍스트 ${text.length}자${hasTables?' (표 포함)':''}, 이미지 ${imgEls.length}개 감지`);
 
     // ── [Step 2] 이미지별 OCR 스크리닝 ─────────────────────────────
     // OCR 성공 → 텍스트 자동 포함 / OCR 실패 → 사용자 선택
