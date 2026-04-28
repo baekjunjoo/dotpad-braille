@@ -1859,6 +1859,7 @@ function onFileSelect(e){
  */
 function extractStructuredTextFromHtml(htmlDoc){
   const parts=[];
+  let _imgN=0; // 이미지 순번 (<<IMG1>>, <<IMG2>>... 플레이스홀더용)
 
   function processTable(tbl){
     const rows=Array.from(tbl.querySelectorAll('tr'));
@@ -1885,6 +1886,12 @@ function extractStructuredTextFromHtml(htmlDoc){
     if(['script','style','head'].includes(tag)) return;
     if(tag==='table'){processTable(node);return;} // 표는 별도 처리, 재귀 안 함
     if(tag==='br'){parts.push('\n');return;}
+    if(tag==='img'){
+      // 이미지 위치에 플레이스홀더 삽입 — loadDocx에서 OCR/사용자 선택 결과로 교체
+      const src=node.getAttribute('src')||'';
+      if(src.startsWith('data:image')){ _imgN++; parts.push(`\n<<IMG${_imgN}>>\n`); }
+      return;
+    }
     if(tag==='p'||/^h[1-6]$/.test(tag)){walkChildren(node);parts.push('\n');return;}
     if(tag==='li'){parts.push('• ');walkChildren(node);parts.push('\n');return;}
     walkChildren(node);
@@ -2040,7 +2047,7 @@ function showImageDecisionModal(items){
     _imgDecisionResolve=resolve;
     _imgDecisions.length=0;
     items.forEach((item,i)=>{
-      _imgDecisions.push({imgSrc:item.imgSrc, ocrText:item.ocrText, action:'image'});
+      _imgDecisions.push({imgSrc:item.imgSrc, ocrText:item.ocrText, action:'image', imgN:item.imgN||0});
     });
 
     const list=document.getElementById('imgDecisionList');
@@ -2089,75 +2096,83 @@ async function loadDocx(file){
   try{
     const arrayBuffer=await file.arrayBuffer();
 
-    // ── [Step 1] 텍스트 추출 + HTML 변환(이미지 포함) 병렬 수행 ──
-    // RISK-06 fix: 동일 ArrayBuffer를 두 함수에 동시 전달 시 오염 방지 → slice(0) 복사본 사용
+    // ── [Step 1] HTML 변환 + 구조화 텍스트 추출 (표·이미지 위치 보존) ──
+    // RISK-06 fix: slice(0) 복사본
     const [textResult, htmlResult]=await Promise.all([
       mammoth.extractRawText({arrayBuffer}),
       mammoth.convertToHtml({arrayBuffer: arrayBuffer.slice(0)})
     ]);
-    // ── [Step 1] HTML 파싱 — 표 구조 보존 텍스트 추출 + 이미지 추출 ──
     const parser=new DOMParser();
     const htmlDoc=parser.parseFromString(htmlResult.value,'text/html');
 
-    // 표가 있으면 구조화 텍스트 사용 (N행 M열 레이블), 없으면 rawText fallback
-    const hasTables=htmlDoc.querySelector('table')!==null;
-    let text = hasTables
-      ? extractStructuredTextFromHtml(htmlDoc)  // 표 구조 보존 (NVDA 방식)
-      : textResult.value.trim();                 // 일반 문서: rawText 그대로
+    // extractStructuredTextFromHtml: 표·이미지 위치에 플레이스홀더 삽입
+    // 이미지 위치: <<IMG1>>, <<IMG2>>... → 나중에 "이미지 N\n[내용]"으로 교체
+    let text=extractStructuredTextFromHtml(htmlDoc);
+    // 구조화 텍스트가 너무 짧으면 rawText fallback
+    if(text.replace(/<<IMG\d+>>/g,'').trim().length<10)
+      text=textResult.value.trim();
 
     const imgEls=Array.from(htmlDoc.querySelectorAll('img[src^="data:image"]'));
-    addLog('info',`DOCX 분석: 텍스트 ${text.length}자${hasTables?' (표 포함)':''}, 이미지 ${imgEls.length}개 감지`);
+    const hasTables=htmlDoc.querySelector('table')!==null;
+    addLog('info',`DOCX 분석: ${text.length}자${hasTables?' (표 포함)':''}, 이미지 ${imgEls.length}개`);
 
     // ── [Step 2] 이미지별 OCR 스크리닝 ─────────────────────────────
-    // OCR 성공 → 텍스트 자동 포함 / OCR 실패 → 사용자 선택
-    const ocrAutoTexts=[];  // OCR 성공 이미지 텍스트 (기존 text에 병합)
-    const pendingImgs=[];   // 사용자 선택 필요 이미지
+    // imgEls[i] ↔ 플레이스홀더 <<IMG(i+1)>> 1:1 대응
+    const imgReplacements={};  // {<<IMGn>>: '이미지 N\n[내용]' 또는 ''}
+    const pendingImgs=[];      // 사용자 선택 필요 이미지 목록
 
     for(let i=0;i<imgEls.length;i++){
-      showPdfLoading(`이미지 분석 중... (${i+1}/${imgEls.length})`);
+      const n=i+1;
+      showPdfLoading(`이미지 분석 중... (${n}/${imgEls.length})`);
       const check=await quickOcrCheck(imgEls[i].src);
       if(check.hasText){
-        // 텍스트 이미지: OCR 결과 자동 포함
-        ocrAutoTexts.push(check.text);
-        addLog('info',`✓ 이미지 ${i+1}: 텍스트 감지 → OCR 자동 포함`);
+        // OCR 성공: "이미지 N" 레이블 + OCR 텍스트를 원래 위치에 삽입
+        imgReplacements[`<<IMG${n}>>`]=`이미지 ${n}\n${check.text.trim()}`;
+        addLog('info',`✓ 이미지 ${n}: 텍스트 감지 → 원래 위치에 OCR 자동 삽입`);
       }else{
-        // 사진/도형: 사용자 선택 대기
-        pendingImgs.push({imgSrc:imgEls[i].src, label:`이미지 ${i+1}`, ocrText:''});
+        pendingImgs.push({imgSrc:imgEls[i].src, label:`이미지 ${n}`, ocrText:'', imgN:n});
       }
     }
 
-    // OCR fallback: 텍스트 전혀 없고 OCR 자동 텍스트도 없는 경우
-    if(text.length<10 && ocrAutoTexts.length===0 && imgEls.length>0){
+    // OCR fallback: 텍스트도 없고 이미지도 전부 OCR 실패한 경우
+    const textBody=text.replace(/<<IMG\d+>>/g,'').trim();
+    if(textBody.length<10 && pendingImgs.length===imgEls.length && imgEls.length>0){
       addLog('info','텍스트 없음 → 전체 이미지 OCR 재시도...');
-      try{ text=await ocrDocxImages(arrayBuffer); }
-      catch(e){ console.warn('[OCR] DOCX OCR 실패:',e); text=''; }
-    }
-
-    // OCR 성공 이미지 텍스트를 기존 텍스트에 병합
-    if(ocrAutoTexts.length>0){
-      const ocr=ocrAutoTexts.join('\n\n');
-      text=text?(text+'\n\n'+ocr):ocr;
+      try{ const fb=await ocrDocxImages(arrayBuffer); if(fb) text=fb; }
+      catch(e){ console.warn('[OCR] DOCX OCR 실패:',e); }
     }
 
     // ── [Step 3] 사진 이미지 → 사용자 결정 모달 ─────────────────
     let imagePages=[];
     if(pendingImgs.length>0){
       hidePdfLoading();
-      addLog('info',`📷 사진 ${pendingImgs.length}개 — 포함 방식를 선택해 주세요`);
+      addLog('info',`📷 사진 ${pendingImgs.length}개 — 포함 방식을 선택해 주세요`);
       const decisions=await showImageDecisionModal(pendingImgs);
       showPdfLoading('이미지 처리 중...');
 
       for(const d of decisions){
+        const n=d.imgN||0;
         if(d.action==='image'){
           try{
             const dots=await imgSrcToDotCells(d.imgSrc);
             imagePages.push({type:'image', dots});
-            addLog('info','✓ 이미지 촉각 변환 완료');
+            // 텍스트 흐름에 "이미지 N" 레이블만 삽입 (촉각 페이지가 별도 존재함을 표시)
+            if(n) imgReplacements[`<<IMG${n}>>`]=`이미지 ${n}`;
+            addLog('info',`✓ 이미지 ${n} 촉각 변환 완료`);
           }catch(e){ console.warn('[Image] 변환 실패:',e); }
+        } else {
+          // 제외: 플레이스홀더 제거
+          if(n) imgReplacements[`<<IMG${n}>>`]='';
         }
-        // action==='skip' → 제외
       }
     }
+
+    // ── [Step 4] 플레이스홀더 → 실제 내용으로 교체 ─────────────────
+    for(const [ph,repl] of Object.entries(imgReplacements)){
+      text=text.replace(ph, repl ? '\n'+repl+'\n' : '');
+    }
+    // 처리되지 않은 플레이스홀더 제거
+    text=text.replace(/<<IMG\d+>>/g,'').replace(/\n{3,}/g,'\n\n').trim();
 
     // 텍스트도 없고 이미지 처리도 실패하면 에러
     if(!text&&imagePages.length===0){
