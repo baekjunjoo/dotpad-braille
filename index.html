@@ -529,6 +529,7 @@ textarea::placeholder{color:#c8c6bc;}
             <option value="de">🇩🇪 Deutsch</option>
             <option value="es">🇪🇸 Español</option>
             <option value="ar">🇸🇦 العربية</option>
+            <option value="math">➗ 수학(Nemeth)</option>
           </select>
         </div>
         <div class="fld-row">
@@ -988,12 +989,13 @@ const JAMO_BRAILLE={
 // 언어 메타데이터 (UI 표시 + 내장 엔진 vs LibLouis 필요 여부 판별)
 // ============================================================
 const LANG_META={
-  ko:{flag:'🇰🇷', name:'한국어', greeting:'안녕하세요',   placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...',  needsLouis:false},
-  en:{flag:'🇺🇸', name:'English',  greeting:'Hello',       placeholder:'Type English text — sends to DotPad in real time...',              needsLouis:false},
-  fr:{flag:'🇫🇷', name:'Français', greeting:'Bonjour',     placeholder:'Saisissez du texte en français...',                               needsLouis:true},
-  de:{flag:'🇩🇪', name:'Deutsch',  greeting:'Hallo',       placeholder:'Deutschen Text hier eingeben...',                                 needsLouis:true},
-  es:{flag:'🇪🇸', name:'Español',  greeting:'Hola',        placeholder:'Escriba texto en español...',                                     needsLouis:true},
-  ar:{flag:'🇸🇦', name:'العربية',  greeting:'مرحبا',       placeholder:'أدخل النص العربي هنا...',                                        needsLouis:true},
+  ko:  {flag:'🇰🇷', name:'한국어',  greeting:'안녕하세요', placeholder:'텍스트를 입력하면 실시간으로 점자 변환되어 닷패드에 출력됩니다...', needsLouis:false},
+  en:  {flag:'🇺🇸', name:'English', greeting:'Hello',      placeholder:'Type English text — sends to DotPad in real time...',             needsLouis:false},
+  fr:  {flag:'🇫🇷', name:'Français',greeting:'Bonjour',    placeholder:'Saisissez du texte en français...',                              needsLouis:true},
+  de:  {flag:'🇩🇪', name:'Deutsch', greeting:'Hallo',      placeholder:'Deutschen Text hier eingeben...',                                needsLouis:true},
+  es:  {flag:'🇪🇸', name:'Español', greeting:'Hola',       placeholder:'Escriba texto en español...',                                    needsLouis:true},
+  ar:  {flag:'🇸🇦', name:'العربية', greeting:'مرحبا',      placeholder:'أدخل النص العربي هنا...',                                       needsLouis:true},
+  math:{flag:'➗',  name:'수학(Nemeth)', greeting:'x^2+1=0', placeholder:'수식 입력: $x^2+1=0$  또는  √x · π ± ∞ 등 유니코드 수학기호 직접 입력...', needsLouis:true},
 };
 
 // ============================================================
@@ -1099,12 +1101,13 @@ let louisReady=false;
 
 /** language 코드 + grade → LibLouis 테이블 파일명 */
 const LOUIS_TABLES={
-  'ko':  {1:'ko-g1.ctb',        2:'ko-g2.ctb'},
-  'en':  {1:'en-ueb-g1.ctb',    2:'en-ueb-g2.ctb'},
-  'fr':  {1:'fr-fr-g1.utb',     2:'fr-bfu-g2.ctb'},
-  'de':  {1:'de-de-g1.ctb',     2:'de-de-g2.ctb'},
-  'es':  {1:'es-g1.ctb',        2:'es-g1.ctb'},
-  'ar':  {1:'ar-ar-g1.utb',     2:'ar-ar-g1.utb'},
+  'ko':   {1:'ko-g1.ctb',        2:'ko-g2.ctb'},
+  'en':   {1:'en-ueb-g1.ctb',    2:'en-ueb-g2.ctb'},
+  'fr':   {1:'fr-fr-g1.utb',     2:'fr-bfu-g2.ctb'},
+  'de':   {1:'de-de-g1.ctb',     2:'de-de-g2.ctb'},
+  'es':   {1:'es-g1.ctb',        2:'es-g1.ctb'},
+  'ar':   {1:'ar-ar-g1.utb',     2:'ar-ar-g1.utb'},
+  'math': {1:'nemeth.ctb',       2:'nemeth.ctb'}, // Nemeth Code (수학 점자)
 };
 
 /** LibLouis 초기화 — 페이지 로드 후 비동기 실행 */
@@ -1692,6 +1695,14 @@ function textToCells(text, language){
 
   let cells=null;
 
+  // ── 수학(Nemeth) ─────────────────────────────────────────────────
+  if(language==='math'){
+    const nc=louisTextToCells(text,'math',1);
+    if(nc){
+      if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
+      _cellCache.set(cacheKey,nc); return nc;
+    }
+  }
   // ── 한국어 ──────────────────────────────────────────────────────
   // G2 = 약자·약어: braillify 직접 사용 (18항 약어를 braillify가 자체 처리)
   //   ※ applyKoG2WordMap 전처리 제거 — '그래서'→'서' 치환이 약어를 파괴함
@@ -1753,6 +1764,179 @@ const FILE_META={
   ebrf:{icon:'⠿',  label:'EBRF 점자 파일', autoLang:true},
   ebrl:{icon:'⠿',  label:'eBraille 1.0 파일', autoLang:true},
 };
+
+// ============================================================
+// 수학 점자 (Nemeth Code) — 수식 처리 엔진
+// ============================================================
+
+/**
+ * LaTeX 기초 수식 → Nemeth 입력용 유니코드 변환
+ * - 지수(^), 첨자(_), 루트(\sqrt), 분수(\frac), 그리스 문자, 수학기호 지원
+ */
+function latexToUnicodeForNemeth(latex){
+  const SUP={'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',
+             'n':'ⁿ','i':'ⁱ','a':'ᵃ','b':'ᵇ','c':'ᶜ','x':'ˣ','y':'ʸ','+':'⁺','-':'⁻','=':'⁼','(':'^(',')':'^)'};
+  const SUB={'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',
+             'n':'ₙ','i':'ᵢ','j':'ⱼ','x':'ₓ'};
+  const toSup=s=>[...s].map(c=>SUP[c]||c).join('');
+  const toSub=s=>[...s].map(c=>SUB[c]||c).join('');
+
+  return latex
+    // 분수: \frac{num}{den} → (num)/(den)
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)')
+    // 루트: \sqrt{x} → √x
+    .replace(/\\sqrt\{([^}]*)\}/g, (_, x)=>'√('+x+')')
+    .replace(/\\sqrt\s/g, '√')
+    // 지수: x^{expr} → x^expr (유니코드 위첨자)
+    .replace(/\^\{([^}]*)\}/g, (_, e)=>toSup(e))
+    .replace(/\^(\w)/g, (_, c)=>toSup(c))
+    // 아래첨자: x_{expr}
+    .replace(/_\{([^}]*)\}/g, (_, e)=>toSub(e))
+    .replace(/_(\w)/g, (_, c)=>toSub(c))
+    // 그리스 문자
+    .replace(/\\alpha/g,'α').replace(/\\beta/g,'β').replace(/\\gamma/g,'γ')
+    .replace(/\\delta/g,'δ').replace(/\\epsilon/g,'ε').replace(/\\zeta/g,'ζ')
+    .replace(/\\theta/g,'θ').replace(/\\lambda/g,'λ').replace(/\\mu/g,'μ')
+    .replace(/\\nu/g,'ν').replace(/\\pi/g,'π').replace(/\\rho/g,'ρ')
+    .replace(/\\sigma/g,'σ').replace(/\\tau/g,'τ').replace(/\\phi/g,'φ')
+    .replace(/\\psi/g,'ψ').replace(/\\omega/g,'ω')
+    .replace(/\\Gamma/g,'Γ').replace(/\\Delta/g,'Δ').replace(/\\Theta/g,'Θ')
+    .replace(/\\Lambda/g,'Λ').replace(/\\Pi/g,'Π').replace(/\\Sigma/g,'Σ')
+    .replace(/\\Phi/g,'Φ').replace(/\\Psi/g,'Ψ').replace(/\\Omega/g,'Ω')
+    // 연산자
+    .replace(/\\pm/g,'±').replace(/\\times/g,'×').replace(/\\div/g,'÷')
+    .replace(/\\cdot/g,'·').replace(/\\leq/g,'≤').replace(/\\geq/g,'≥')
+    .replace(/\\neq/g,'≠').replace(/\\approx/g,'≈').replace(/\\infty/g,'∞')
+    .replace(/\\sum/g,'∑').replace(/\\int/g,'∫').replace(/\\partial/g,'∂')
+    .replace(/\\nabla/g,'∇').replace(/\\forall/g,'∀').replace(/\\exists/g,'∃')
+    .replace(/\\in/g,'∈').replace(/\\subset/g,'⊂').replace(/\\cup/g,'∪')
+    .replace(/\\cap/g,'∩').replace(/\\not\\in/g,'∉')
+    // 괄호
+    .replace(/\\left\(/g,'(').replace(/\\right\)/g,')')
+    .replace(/\\left\[/g,'[').replace(/\\right\]/g,']')
+    .replace(/\\left\{/g,'{').replace(/\\right\}/g,'}')
+    .replace(/\\left\|/g,'|').replace(/\\right\|/g,'|')
+    // 남은 LaTeX 명령어 제거
+    .replace(/\\[a-zA-Z]+\{([^}]*)\}/g,'$1')
+    .replace(/\\[a-zA-Z]+/g,'')
+    .replace(/[{}]/g,'')
+    .trim();
+}
+
+/**
+ * DOCX OMML(Office Math Markup Language) XML 노드 → 텍스트/LaTeX 변환
+ * JSZip으로 추출한 document.xml의 <m:oMath> 노드를 처리
+ */
+function ommlNodeToText(node){
+  const tag=node.localName||node.tagName?.split(':').pop()||'';
+  const ch=n=>Array.from(n.childNodes||[]).map(ommlNodeToText).join('');
+  const first=(n,name)=>{
+    for(const c of (n.childNodes||[])) if((c.localName||c.tagName?.split(':').pop())||''===name) return c;
+    return null;
+  };
+  const childTag=(n,name)=>Array.from(n.childNodes||[]).find(c=>(c.localName||c.tagName?.split(':').pop())==name);
+
+  switch(tag){
+    case 'oMath': case 'oMathPara': return ch(node);
+    case 't': return node.textContent||''; // 텍스트 실행
+    case 'r': return ch(node);             // 수식 실행
+    case 'sSup':{                          // 위첨자 x^n
+      const base=ommlNodeToText(childTag(node,'e')||node);
+      const sup=ommlNodeToText(childTag(node,'sup')||node);
+      return `${base}^{${sup}}`;
+    }
+    case 'sSub':{                          // 아래첨자 x_n
+      const base=ommlNodeToText(childTag(node,'e')||node);
+      const sub=ommlNodeToText(childTag(node,'sub')||node);
+      return `${base}_{${sub}}`;
+    }
+    case 'sSubSup':{                       // 위+아래첨자
+      const b=ommlNodeToText(childTag(node,'e')||node);
+      const s1=ommlNodeToText(childTag(node,'sub')||node);
+      const s2=ommlNodeToText(childTag(node,'sup')||node);
+      return `${b}_{${s1}}^{${s2}}`;
+    }
+    case 'f':{                             // 분수
+      const num=ommlNodeToText(childTag(node,'num')||node);
+      const den=ommlNodeToText(childTag(node,'den')||node);
+      return `\\frac{${num}}{${den}}`;
+    }
+    case 'rad':{                           // 루트
+      const deg=childTag(node,'deg');
+      const e=ommlNodeToText(childTag(node,'e')||node);
+      return deg&&deg.textContent?.trim() ? `${deg.textContent?.trim()}√(${e})` : `\\sqrt{${e}}`;
+    }
+    case 'nary':{                          // 누적기호 (∑,∫ 등)
+      const sub=ommlNodeToText(childTag(node,'sub')||node);
+      const sup=ommlNodeToText(childTag(node,'sup')||node);
+      const e=ommlNodeToText(childTag(node,'e')||node);
+      return `∑_{${sub}}^{${sup}}(${e})`;
+    }
+    case 'func':{                          // 함수 (sin, cos 등)
+      const fname=ommlNodeToText(childTag(node,'fName')||node);
+      const e=ommlNodeToText(childTag(node,'e')||node);
+      return `${fname}(${e})`;
+    }
+    case 'd':{                             // 구분자 (괄호 등)
+      const inner=ch(node);
+      return `(${inner})`;
+    }
+    // 기타: 자식 노드 순회
+    default:
+      if(node.nodeType===3) return node.textContent||''; // 텍스트 노드
+      return ch(node);
+  }
+}
+
+/**
+ * document.xml 문자열에서 모든 OMML 수식 추출
+ * @returns [{idx, latex, position}] 수식 목록
+ */
+function extractOmmlEquations(xmlText){
+  const parser=new DOMParser();
+  const xmlDoc=parser.parseFromString(xmlText,'application/xml');
+  const mathEls=xmlDoc.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math','oMath');
+  const equations=[];
+  Array.from(mathEls).forEach((el,i)=>{
+    const raw=ommlNodeToText(el);
+    const unicode=latexToUnicodeForNemeth(raw);
+    if(unicode.trim()) equations.push({idx:i+1, raw, unicode});
+  });
+  return equations;
+}
+
+/**
+ * 혼합 텍스트에서 $...$, $$...$$ LaTeX 수식 추출 및 Nemeth 변환
+ * 수식이 없으면 원래 텍스트 그대로 반환
+ */
+function processTextWithNemeth(text, baseLang){
+  if(!louisReady) return null; // LibLouis 미준비
+  const mathPat=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g;
+  let hasMath=false;
+  const segments=[];
+  let lastIdx=0, m;
+  while((m=mathPat.exec(text))!==null){
+    hasMath=true;
+    if(m.index>lastIdx) segments.push({type:'text',content:text.slice(lastIdx,m.index)});
+    const inner=m[0].replace(/^\$\$|\$\$$/g,'').replace(/^\$|\$$/g,'').trim();
+    segments.push({type:'math',content:latexToUnicodeForNemeth(inner)});
+    lastIdx=m.index+m[0].length;
+  }
+  if(!hasMath) return null; // 수식 없음 → 일반 처리
+  if(lastIdx<text.length) segments.push({type:'text',content:text.slice(lastIdx)});
+
+  const cells=[];
+  for(const seg of segments){
+    if(seg.type==='math'){
+      const mc=louisTextToCells(seg.content,'math',1);
+      if(mc) cells.push(...mc);
+    }else if(seg.content.trim()){
+      const tc=louisTextToCells(seg.content,baseLang,1)||[];
+      cells.push(...tc);
+    }
+  }
+  return cells.length>0?cells:null;
+}
 
 /** 파일 선택 시 설정 다이얼로그 표시 */
 function openFileLoadDialog(file){
@@ -2173,6 +2357,27 @@ async function loadDocx(file){
     }
     // 처리되지 않은 플레이스홀더 제거
     text=text.replace(/<<IMG\d+>>/g,'').replace(/\n{3,}/g,'\n\n').trim();
+
+    // ── [Step 5] OMML 수식 추출 (Nemeth 변환) ─────────────────────
+    // JSZip으로 word/document.xml에서 <m:oMath> 수식 직접 추출
+    if(typeof JSZip!=='undefined' && louisReady){
+      try{
+        const zipMath=await JSZip.loadAsync(arrayBuffer.slice(0));
+        const docXmlFile=zipMath.file('word/document.xml');
+        if(docXmlFile){
+          showPdfLoading('수식 추출 중...');
+          const docXml=await docXmlFile.async('text');
+          const eqs=extractOmmlEquations(docXml);
+          if(eqs.length>0){
+            // 수식들을 "수식 N: [Nemeth 점자 유니코드 표현]" 형식으로 문서 끝에 추가
+            // (현재는 수식 위치 매핑 대신 요약 섹션으로 추가 — 향후 위치 매핑 개선 가능)
+            const mathSection=eqs.map(e=>`수식 ${e.idx}: ${e.unicode}`).join('\n');
+            text=text?text+'\n\n수식 목록\n'+mathSection:mathSection;
+            addLog('ok',`✓ OMML 수식 ${eqs.length}개 추출 → Nemeth 변환`);
+          }
+        }
+      }catch(e){ console.warn('[OMML] 수식 추출 실패:',e); }
+    }
 
     // 텍스트도 없고 이미지 처리도 실패하면 에러
     if(!text&&imagePages.length===0){
