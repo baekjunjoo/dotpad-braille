@@ -861,7 +861,7 @@ const JONGSEONG=[
   [1,4],     // ㄳ  ⠁⠄  — 구 [8,16] 오류
   [18],      // ㄴ  ⠒   — 구 [9] 오류
   [18,5],    // ㄵ  ⠒⠅  — 구 [9,19] 오류
-  [18,52],   // ㄶ  ⠒⠼  — 구 [9,58] 오류
+  [18,52],   // ㄶ  ⠒⠴  — 구 [9,58] 오류  (52=⠴, 이전 주석 ⠼ 오탈자 수정)
   [20],      // ㄷ  ⠔   — 구 [10] 오류
   [2],       // ㄹ  ⠂   — 구 [11] 오류
   [2,1],     // ㄺ  ⠂⠁  — 구 [11,8] 오류
@@ -994,8 +994,11 @@ const LANG_META={
   de:  {flag:'🇩🇪', name:'Deutsch', greeting:'Hallo',      placeholder:'Deutschen Text hier eingeben...',                                needsLouis:true},
   es:  {flag:'🇪🇸', name:'Español', greeting:'Hola',       placeholder:'Escriba texto en español...',                                    needsLouis:true},
   ar:  {flag:'🇸🇦', name:'العربية', greeting:'مرحبا',      placeholder:'أدخل النص العربي هنا...',                                       needsLouis:true},
+  // math: 내부 엔진용 엔트리 — 언어 셀렉터 미노출, F2 순환에서도 제외
   math:{flag:'➗',  name:'수학(Nemeth)', greeting:'x^2+1=0', placeholder:'수식 입력: $x^2+1=0$  또는  √x · π ± ∞ 등 유니코드 수학기호 직접 입력...', needsLouis:true},
 };
+// F2 하드웨어 키 언어 순환 목록: math 제외 (UI 셀렉터에 없으므로)
+const LANG_ORDER=Object.keys(LANG_META).filter(k=>k!=='math');
 
 // ============================================================
 // BLE 상수
@@ -1696,10 +1699,14 @@ function textToCells(text, language){
 
   // ── Nemeth 사전 변환된 유니코드 점자 pass-through ──────────────────
   // Nemeth 변환 결과(U+2800-U+28FF)를 그대로 셀 배열로 반환
-  if(text && [...text].every(c=>{const n=c.charCodeAt(0);return n>=0x2800&&n<=0x28FF;})){
-    const cells=[...text].map(c=>c.charCodeAt(0)-0x2800);
-    if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
-    _cellCache.set(cacheKey,cells); return cells;
+  if(text){
+    // fix: spread 1회로 최적화 (기존 every+map = 2회 spread)
+    const chars=[...text];
+    if(chars.every(c=>{const n=c.charCodeAt(0);return n>=0x2800&&n<=0x28FF;})){
+      const cells=chars.map(c=>c.charCodeAt(0)-0x2800);
+      if(_cellCache.size>=_CELL_CACHE_MAX) _cellCache.delete(_cellCache.keys().next().value);
+      _cellCache.set(cacheKey,cells); return cells;
+    }
   }
   // ── 수학(Nemeth) — 언어 셀렉터 비노출, 내부 엔진용 ──────────────────
   if(language==='math'){
@@ -1780,13 +1787,7 @@ const FILE_META={
  * - 지수(^), 첨자(_), 루트(\sqrt), 분수(\frac), 그리스 문자, 수학기호 지원
  */
 function latexToUnicodeForNemeth(latex){
-  const SUP={'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',
-             'n':'ⁿ','i':'ⁱ','a':'ᵃ','b':'ᵇ','c':'ᶜ','x':'ˣ','y':'ʸ','+':'⁺','-':'⁻','=':'⁼','(':'^(',')':'^)'};
-  const SUB={'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',
-             'n':'ₙ','i':'ᵢ','j':'ⱼ','x':'ₓ'};
-  const toSup=s=>[...s].map(c=>SUP[c]||c).join('');
-  const toSub=s=>[...s].map(c=>SUB[c]||c).join('');
-
+  // _toSup / _toSub: 모듈 레벨 공유 함수 사용 (이전 로컬 SUP/SUB 복사본 제거)
   return latex
     // 분수: \frac{num}{den} → (num)/(den)
     .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1)/($2)')
@@ -1836,10 +1837,6 @@ function latexToUnicodeForNemeth(latex){
 function ommlNodeToText(node){
   const tag=node.localName||node.tagName?.split(':').pop()||'';
   const ch=n=>Array.from(n.childNodes||[]).map(ommlNodeToText).join('');
-  const first=(n,name)=>{
-    for(const c of (n.childNodes||[])) if((c.localName||c.tagName?.split(':').pop())||''===name) return c;
-    return null;
-  };
   const childTag=(n,name)=>Array.from(n.childNodes||[]).find(c=>(c.localName||c.tagName?.split(':').pop())==name);
 
   switch(tag){
@@ -1894,22 +1891,7 @@ function ommlNodeToText(node){
   }
 }
 
-/**
- * document.xml 문자열에서 모든 OMML 수식 추출
- * @returns [{idx, latex, position}] 수식 목록
- */
-function extractOmmlEquations(xmlText){
-  const parser=new DOMParser();
-  const xmlDoc=parser.parseFromString(xmlText,'application/xml');
-  const mathEls=xmlDoc.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math','oMath');
-  const equations=[];
-  Array.from(mathEls).forEach((el,i)=>{
-    const raw=ommlNodeToText(el);
-    const unicode=latexToUnicodeForNemeth(raw);
-    if(unicode.trim()) equations.push({idx:i+1, raw, unicode});
-  });
-  return equations;
-}
+// extractOmmlEquations: parseDocxWithMath + resolveNemethMarkers로 대체됨 → 제거
 
 /**
  * 혼합 텍스트에서 $...$, $$...$$ LaTeX 수식 추출 및 Nemeth 변환
@@ -1946,7 +1928,8 @@ function processTextWithNemeth(text, baseLang){
       const tc=louisTextToCells(seg.content,baseLang,grade)||[];
       cells.push(...tc); inlineText+=seg.content;
     }else{
-      inlineText+=seg.content;
+      // fix: 공백 세그먼트도 공백 셀(0) 추가 — cells/inlineText 길이 불일치 방지
+      cells.push(0); inlineText+=seg.content;
     }
   }
   return cells.length>0?{cells,inlineText}:null;
@@ -1973,7 +1956,7 @@ function parseDocxWithMath(xmlText){
   const parser=new DOMParser();
   const xmlDoc=parser.parseFromString(xmlText,'application/xml');
   const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-  const M='http://schemas.openxmlformats.org/officeDocument/2006/math';
+  // const M: math NS 미사용 (tagName.split(':').pop()으로 로컬명 직접 비교)
 
   function getTag(n){return n.localName||n.tagName?.split(':').pop()||'';}
 
@@ -2042,7 +2025,7 @@ function openFileLoadDialog(file){
   langSel.value=pdfLang;
   langSel.disabled=!!meta.autoLang;
 
-  fldSetGrade(grade, true); // 버튼 상태만 동기화 (setGrade 전체 호출 X)
+  fldSetGrade(grade); // _fldGrade = 현재 전역 grade로 초기화 (syncOnly 제거)
 
   // BRF/eBRL 등 언어 자동 감지 안내
   const note=document.getElementById('fldNote');
@@ -2062,10 +2045,10 @@ function openFileLoadDialog(file){
 /** 다이얼로그 내 등급 버튼 전환 (전역 grade는 확인 시 적용) */
 let _fldGrade=1;
 function fldSetGrade(g, syncOnly=false){
-  _fldGrade=g;
+  // fix: 첫 줄 무조건 대입 제거 — syncOnly=true 시 _fldGrade 변경 없음
+  if(!syncOnly) _fldGrade=g;
   document.getElementById('fldG1Btn').classList.toggle('active', g===1);
   document.getElementById('fldG2Btn').classList.toggle('active', g===2);
-  if(!syncOnly) _fldGrade=g;
 }
 
 /** 확인: 설정 적용 후 로드 시작 */
@@ -2182,7 +2165,7 @@ function splitTextToPages(fullText, lang, cellsPerPage=CELLS_GRAPHIC){
   const pages=[];
   let buf='', bufCells=0;
 
-  function flushBuf(){if(buf.trim()){pages.push(buf.trim());} buf=''; bufCells=0;}
+  function flushBuf(){const t=buf.trim();if(t)pages.push(t); buf=''; bufCells=0;} // fix: trim 1회로 최적화
 
   function addToken(token, cells){
     if(cells===0) return; // 점자 셀 없는 토큰은 건너뜀
@@ -2294,8 +2277,8 @@ async function loadTxt(file){
 async function quickOcrCheck(imgSrc){
   if(typeof Tesseract==='undefined') return {hasText:false, text:''};
   try{
-    const lang=pdfLang==='ko'?'kor+eng':'eng';
-    const result=await Tesseract.recognize(imgSrc, lang, {logger:()=>{}});
+    const ocrLang=pdfLang==='ko'?'kor+eng':'eng';
+    const result=await Tesseract.recognize(imgSrc, ocrLang, {logger:()=>{}});
     const text=(result.data.text||'').trim();
     // 의미있는 단어가 5개 이상 && 총 글자 30자 이상 → 텍스트 이미지
     const words=text.split(/\s+/).filter(w=>w.length>=2);
@@ -2584,6 +2567,33 @@ function brfCellsToUnicodePreview(cells){
   return out.trim();
 }
 
+/**
+ * BRF/eBRF/eBRL 계열 로더 공통 상태 초기화
+ * docType, pdfLang 설정은 호출부에서 처리
+ */
+function resetBrailleDocState(totalPages){
+  cancelSend();
+  pdfDoc=null;
+  pdfTotalPages=totalPages;
+  pdfCurrentPage=1;
+  pdfOrigFullText='';
+  pdfViewMode='graphic';
+  pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
+  pdfPageSubTexts={}; pdfCurrentSubPage=0;
+  pdfMode=true;
+  _brfHintsCache.clear();
+}
+
+/** BRF/eBRL 계열 공통 UI 업데이트 */
+function showBrailleDocLoaded(filename, metaText){
+  document.getElementById('pdfFilename').textContent=`⠿ ${filename}`;
+  document.getElementById('pdfMeta').textContent=metaText;
+  hidePdfLoading();
+  document.getElementById('dropZoneWrap').style.display='none';
+  document.getElementById('pdfLoadedWrap').style.display='block';
+  document.getElementById('dualBadge').style.display='flex';
+}
+
 /** BRF / BRL 로더 */
 async function loadBrf(file){
   showPdfLoading(`${file.name} 불러오는 중...`);
@@ -2593,23 +2603,10 @@ async function loadBrf(file){
     const cellPages=parseBrfToCellPages(text);
     const type=file.name.toLowerCase().endsWith('.brl')?'brl':'brf';
 
-    // 전역 상태 초기화
-    cancelSend();
+    // 공통 상태 초기화
+    resetBrailleDocState(cellPages.length);
     docType=type;
-    pdfDoc=null;
-    pdfTotalPages=cellPages.length;
-    pdfCurrentPage=1;
-    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
-    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
-    pdfPageTexts={};
-    pdfPageDots={};
-    pdfPageHasImg={};
-    pdfPageIsOcr={};
-    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
-    pdfMode=true;
-    // BRF/BRL은 대부분 영어 점자 — 역번역 기본 언어를 영어로 설정
-    pdfLang='en';
-    _brfHintsCache.clear();
+    pdfLang='en'; // BRF/BRL은 대부분 영어
     const pdfLangSel=document.getElementById('pdfLangSelect');
     if(pdfLangSel) pdfLangSel.value='en';
 
@@ -2621,13 +2618,7 @@ async function loadBrf(file){
       pdfPageTexts[pn]=brfCellsToUnicodePreview(cells); // 유니코드 점자 미리보기
     });
 
-    document.getElementById('pdfFilename').textContent=`⠿ ${file.name}`;
-    document.getElementById('pdfMeta').textContent=`총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀`;
-    hidePdfLoading();
-    document.getElementById('dropZoneWrap').style.display='none';
-    document.getElementById('pdfLoadedWrap').style.display='block';
-    document.getElementById('dualBadge').style.display='flex';
-
+    showBrailleDocLoaded(file.name,`총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀`);
     addLog('ok',`✓ ${type.toUpperCase()} 로드: ${file.name} → ${pdfTotalPages}p`);
     displayPdfPage(1);
   }catch(e){
@@ -2687,23 +2678,10 @@ async function loadEbrf(file){
       return;
     }
 
-    // 전역 상태 초기화
-    cancelSend();
+    // 공통 상태 초기화
+    resetBrailleDocState(cellPages.length);
     docType='ebrf';
-    pdfDoc=null;
-    pdfTotalPages=cellPages.length;
-    pdfCurrentPage=1;
-    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
-    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
-    pdfPageTexts={};
-    pdfPageDots={};
-    pdfPageHasImg={};
-    pdfPageIsOcr={};
-    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
-    pdfMode=true;
-    // EBRF는 대부분 영어 점자 — 언어 코드에서 'ko' 감지 시 한국어로 설정
     pdfLang=lang.toLowerCase().startsWith('ko')?'ko':'en';
-    _brfHintsCache.clear();
     const pdfLangSel=document.getElementById('pdfLangSelect');
     if(pdfLangSel) pdfLangSel.value=pdfLang;
 
@@ -2718,14 +2696,7 @@ async function loadEbrf(file){
     // 표시 이름: 메타 타이틀 우선
     const displayName=title!==file.name ? `${title}` : file.name;
     const metaExtra=author ? ` · 저자: ${author}` : '';
-    document.getElementById('pdfFilename').textContent=`⠿ ${displayName}`;
-    document.getElementById('pdfMeta').textContent=
-      `총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀${metaExtra}`;
-    hidePdfLoading();
-    document.getElementById('dropZoneWrap').style.display='none';
-    document.getElementById('pdfLoadedWrap').style.display='block';
-    document.getElementById('dualBadge').style.display='flex';
-
+    showBrailleDocLoaded(displayName,`총 ${pdfTotalPages}페이지 · 페이지당 ${CELLS_GRAPHIC}셀${metaExtra}`);
     addLog('ok',`✓ EBRF 로드: ${displayName} → ${pdfTotalPages}p (언어: ${pdfLang})`);
     displayPdfPage(1);
   }catch(e){
@@ -2902,20 +2873,10 @@ async function loadEbrl(file){
       return;
     }
 
-    // ── 8. 전역 상태 초기화 ───────────────────────────────────────
-    cancelSend();
+    // ── 8. 공통 상태 초기화 ─────────────────────────────────────────
+    resetBrailleDocState(cellPages.length);
     docType='ebrl';
-    pdfDoc=null;
-    pdfTotalPages=cellPages.length;
-    pdfCurrentPage=1;
-    pdfOrigFullText='';       // fix: 이전 TXT/DOCX 내용 잔류 방지
-    pdfViewMode='graphic';    // fix: 이전 세션 뷰 모드 초기화
-    pdfPageTexts={}; pdfPageDots={}; pdfPageHasImg={}; pdfPageIsOcr={};
-    pdfPageSubTexts={}; pdfCurrentSubPage=0; // fix: 서브페이지 상태 초기화 누락
-    pdfMode=true;
-    // 언어: BCP 47 태그 'ko-Brai' 등 → 앞 2글자로 판단
     pdfLang=langRaw.toLowerCase().startsWith('ko')?'ko':'en';
-    _brfHintsCache.clear();
     const sel=document.getElementById('pdfLangSelect');
     if(sel) sel.value=pdfLang;
 
@@ -3076,10 +3037,10 @@ async function ocrPdfPage(pdfPage){
   applyImagePipeline(ctx, canvas.width, canvas.height);
 
   // 언어: 한국어 PDF면 kor+eng, 영어면 eng
-  const lang=pdfLang==='ko'?'kor+eng':'eng';
+  const ocrLang=pdfLang==='ko'?'kor+eng':'eng'; // fix: 모듈 레벨 lang 변수와 이름 충돌 방지
   showPdfLoading('이미지 OCR 중...');
   try{
-    const result=await Tesseract.recognize(canvas,lang,{
+    const result=await Tesseract.recognize(canvas,ocrLang,{
       logger:m=>{
         if(m.status==='recognizing text'){
           showPdfLoading(`OCR ${Math.round(m.progress*100)}%...`);
@@ -3113,7 +3074,7 @@ async function ocrDocxImages(arrayBuffer){
 
   if(imgs.length===0) return '';
 
-  const lang=pdfLang==='ko'?'kor+eng':'eng';
+  const ocrLang=pdfLang==='ko'?'kor+eng':'eng';
   const texts=[];
 
   for(let i=0;i<imgs.length;i++){
@@ -3240,10 +3201,10 @@ function looksLikeRealText(text){
 
 // ── PDF 수식 보조 함수 ──────────────────────────────────────────────
 
-/** 문자열을 유니코드 위첨자로 변환 */
+/** 유니코드 위첨자 맵 (latexToUnicodeForNemeth + fixChemicalPatterns + getPdfPageText 공유) */
 const _SUP_MAP={'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹',
-               '+':'⁺','-':'⁻','=':'⁼','(':'^(',')':'^)','n':'ⁿ','a':'ᵃ','b':'ᵇ','x':'ˣ','i':'ⁱ'};
-/** 문자열을 유니코드 아래첨자로 변환 */
+               '+':'⁺','-':'⁻','=':'⁼','(':'^(',')':'^)','n':'ⁿ','a':'ᵃ','b':'ᵇ','c':'ᶜ','x':'ˣ','y':'ʸ','i':'ⁱ'};
+/** 유니코드 아래첨자 맵 */
 const _SUB_MAP={'0':'₀','1':'₁','2':'₂','3':'₃','4':'₄','5':'₅','6':'₆','7':'₇','8':'₈','9':'₉',
                '+':'₊','-':'₋','=':'₌','n':'ₙ','a':'ₐ','e':'ₑ','i':'ᵢ','j':'ⱼ','x':'ₓ'};
 function _toSup(s){ return [...s].map(c=>_SUP_MAP[c]||c).join(''); }
@@ -3367,7 +3328,7 @@ async function getPdfPageText(pageNum){
  * 반환: string[] — 각 서브페이지의 텍스트 (≤300셀)
  */
 function getOrBuildSubPages(pageNum, text){
-  if(pdfPageSubTexts[pageNum]) return pdfPageSubTexts[pageNum];
+  if(pdfPageSubTexts[pageNum]!==undefined) return pdfPageSubTexts[pageNum]; // fix: 빈 배열도 캐시 히트
   const cellCount=textToCells(text, pdfLang).length;
   let sub;
   if(cellCount<=CELLS_GRAPHIC){
@@ -3974,8 +3935,7 @@ async function onNotify(e){  // BUG-06 fix: async 추가 → displayPdfPage awai
     addLog('key',`⌨ 기능키: F${fNum}`);
     if(fNum===1)      toggleHints();                        // F1: 힌트 토글
     else if(fNum===2){                                       // F2: 언어 순환 (LibLouis 지원 언어 포함)
-      const LANG_ORDER=Object.keys(LANG_META);
-      const next=LANG_ORDER[(LANG_ORDER.indexOf(lang)+1)%LANG_ORDER.length];
+      const next=LANG_ORDER[(LANG_ORDER.indexOf(lang)+1)%LANG_ORDER.length]; // LANG_ORDER: 모듈 레벨 상수
       setLang(next);
       addLog('info',`언어: ${LANG_META[next].flag} ${LANG_META[next].name}`);
     }
